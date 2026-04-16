@@ -10,9 +10,8 @@ use crossterm::{
 use ratatui::{
     prelude::*,
     widgets::{
-        Axis, BarChart, Block, Borders, Cell, Chart, Clear, Dataset,
-        GraphType, Gauge, LineGauge, List, ListItem, ListState,
-        Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Axis, BarChart, Block, Borders, Cell, Chart, Clear, Dataset, Gauge, GraphType, LineGauge,
+        List, ListItem, ListState, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
         Sparkline, Table, TableState, Tabs, Wrap,
     },
 };
@@ -1291,7 +1290,8 @@ impl App {
         };
         let note_color = status_color(
             &self.theme,
-            (snapshot.cpu_usage as f64).max(percentage(snapshot.used_memory, snapshot.total_memory)),
+            (snapshot.cpu_usage as f64)
+                .max(percentage(snapshot.used_memory, snapshot.total_memory)),
         );
 
         let items = vec![
