@@ -1,0 +1,14 @@
+[package]
+name = "sysman"
+version = "0.1.0"
+edition = "2024"
+description = "A system management CLI for system health, processes, disks, memory, and services."
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.29"
+ratatui = "0.29"
+sysinfo = "0.37"
