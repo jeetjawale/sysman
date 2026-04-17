@@ -13,9 +13,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
     // Rebuild disk label cache early to avoid Box::leak
     let labels: Vec<String> = {
         let snapshot = app.snapshot.as_ref().unwrap();
-        snapshot.disks.iter().take(5).map(|d| {
-            d.mount.rsplit('/').next().unwrap_or(&d.mount).to_string()
-        }).collect()
+        snapshot
+            .disks
+            .iter()
+            .take(5)
+            .map(|d| d.mount.rsplit('/').next().unwrap_or(&d.mount).to_string())
+            .collect()
     };
     app.disk_chart_labels.clear();
     app.disk_chart_labels.extend(labels);
@@ -31,7 +34,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
     let mut disk_state = TableState::default();
     disk_state.select(Some(app.disk_scroll));
     frame.render_stateful_widget(
-        disk_table(app, &snapshot.disks, app.disk_scroll, widgets::visible_rows(sections[0], 4)),
+        disk_table(
+            app,
+            &snapshot.disks,
+            app.disk_scroll,
+            widgets::visible_rows(sections[0], 4),
+        ),
         sections[0],
         &mut disk_state,
     );
@@ -48,7 +56,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(6),
-            Constraint::Length(8),
+            Constraint::Length(7),
+            Constraint::Length(7),
             Constraint::Length(8),
             Constraint::Min(6),
         ])
@@ -56,9 +65,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
 
     frame.render_widget(disk_stats(app, snapshot), sidebar[0]);
     frame.render_widget(disk_hotspots(app, snapshot), sidebar[1]);
-    
+    frame.render_widget(disk_io_panel(app), sidebar[2]);
+
     // Build disk usage barchart using cached labels
-    let disk_data: Vec<(&str, u64)> = app.disk_chart_labels
+    let disk_data: Vec<(&str, u64)> = app
+        .disk_chart_labels
         .iter()
         .zip(snapshot.disks.iter().take(5))
         .map(|(label, d): (&String, &DiskRow)| (label.as_str(), d.usage as u64))
@@ -77,9 +88,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
         )
         .direction(Direction::Horizontal)
         .label_style(Style::default().fg(app.theme.text_secondary));
-    frame.render_widget(disk_widget, sidebar[2]);
-    
-    frame.render_widget(disk_guidance(app), sidebar[3]);
+    frame.render_widget(disk_widget, sidebar[3]);
+    frame.render_widget(disk_guidance(app), sidebar[4]);
 }
 
 // ---------------------------------------------------------------------------
@@ -109,8 +119,11 @@ fn disk_table<'a>(
                 Cell::from(disk.filesystem.clone()),
                 Cell::from(collectors::format_bytes(disk.used)),
                 Cell::from(collectors::format_bytes(disk.total)),
-                Cell::from(format!("{:.1}%", disk.usage))
-                    .style(Style::default().fg(usage_color).add_modifier(Modifier::BOLD)),
+                Cell::from(format!("{:.1}%", disk.usage)).style(
+                    Style::default()
+                        .fg(usage_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])
             .style(row_style)
         })
@@ -138,7 +151,11 @@ fn disk_table<'a>(
         ),
     )
     .row_highlight_style(selected_style)
-    .block(widgets::active_block(&app.theme, "Disk Usage", app.animation_frame))
+    .block(widgets::active_block(
+        &app.theme,
+        "Disk Usage",
+        app.animation_frame,
+    ))
 }
 
 fn disk_stats(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
@@ -170,22 +187,52 @@ fn disk_hotspots(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
 }
 
 fn disk_guidance(app: &App) -> List<'_> {
-    let items = vec![
+    let mut items = vec![
         ListItem::new(Span::styled(
-            "Disk Health Tips",
+            "Directory Explorer",
             Style::default()
                 .fg(app.theme.brand)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(""),
-        ListItem::new("• Keep usage below 80%"),
-        ListItem::new("• Monitor /home and / closely"),
-        ListItem::new("• Use `df -h` for quick check"),
     ];
+    if let Some(target) = &app.dir_scan_target {
+        items.push(ListItem::new(format!("Mount: {target}")));
+        for (path, size) in app.dir_scan_rows.iter().take(6) {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            items.push(ListItem::new(format!(
+                "• {} {}",
+                collectors::truncate(name, 16),
+                collectors::format_bytes(*size)
+            )));
+        }
+        if app.dir_scan_rows.is_empty() {
+            items.push(ListItem::new("No directory data"));
+        }
+    } else {
+        items.push(ListItem::new("Press `f` to scan selected mount"));
+        items.push(ListItem::new("Shows top directories by size"));
+    }
 
     List::new(items)
-        .block(widgets::block(&app.theme, "Tips"))
+        .block(widgets::block(&app.theme, "Explorer"))
         .highlight_style(Style::default().fg(app.theme.brand))
+}
+
+fn disk_io_panel(app: &App) -> Paragraph<'static> {
+    let mut lines: Vec<Line> = Vec::new();
+    for row in app.disk_io_rows.iter().take(3) {
+        lines.push(Line::from(format!(
+            "{} r:{} w:{}",
+            row.device,
+            widgets::format_rate(row.read_bps),
+            widgets::format_rate(row.write_bps)
+        )));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from("No disk I/O data"));
+    }
+    Paragraph::new(lines).block(widgets::block(&app.theme, "Disk I/O"))
 }
 
 fn worst_disk_mount(snapshot: &Snapshot) -> String {
