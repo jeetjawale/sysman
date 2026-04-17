@@ -41,13 +41,13 @@ pub struct Snapshot {
 }
 
 /// Collect a full system snapshot for display.
-pub fn collect_snapshot(service_state: ServiceState, process_limit: usize) -> Result<Snapshot> {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+pub fn collect_snapshot(sys: &mut System, service_state: ServiceState, process_limit: usize) -> Result<Snapshot> {
+     sys.refresh_all();
     sys.refresh_processes(ProcessesToUpdate::All, true);
+    sys.refresh_cpu_usage();
 
     let disks = storage::collect_disks();
-    let processes = procs::collect_processes(process_limit, ProcessSort::Cpu);
+    let processes = procs::collect_processes(&sys, process_limit, ProcessSort::Cpu);
     let services = systemd::collect_services(service_state, 50).unwrap_or_default();
     let service_summary = if cfg!(target_os = "linux") {
         systemd::count_systemd_services()

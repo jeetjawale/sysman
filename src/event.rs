@@ -113,11 +113,11 @@ impl App {
             }
 
             _ => {
-                self.pending_g = false;
                 false
             }
         };
 
+        // Reset pending 'g' key if any other key is pressed
         if !matches!(key.code, KeyCode::Char('g')) {
             self.pending_g = false;
         }

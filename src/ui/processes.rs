@@ -9,15 +9,28 @@ use ratatui::{
     },
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
-    let snapshot = app.snapshot.as_ref().unwrap();
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
+    // Rebuild process label cache early to avoid Box::leak
+    // Collect names first, then drop the filtered reference
+    let names: Vec<String> = {
+        let filtered = app.filtered_processes(snapshot);
+        filtered.iter().take(5).map(|p| {
+            if p.name.len() > 10 {
+                p.name[..10].to_string()
+            } else {
+                p.name.clone()
+            }
+        }).collect()
+    };
+    app.process_chart_labels.clear();
+    app.process_chart_labels.extend(names);
+
+    let filtered = app.filtered_processes(snapshot);
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Min(10)])
         .split(area);
-
-    let filtered = app.filtered_processes(snapshot);
 
     // -- Header: sort + filter info ----------------------------------------
     let header = Paragraph::new(vec![
@@ -72,7 +85,28 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .split(bottom[1]);
 
     frame.render_widget(process_stats(app, snapshot, filtered.len()), sidebar[0]);
-    frame.render_widget(process_memory_barchart(app, &filtered), sidebar[1]);
+    
+    // Build process memory barchart using cached labels
+    let process_memory_data: Vec<(&str, u64)> = app.process_chart_labels
+        .iter()
+        .zip(filtered.iter().take(5))
+        .map(|(label, p)| (label.as_str(), p.memory / (1024 * 1024)))
+        .collect();
+    let process_memory_widget = BarChart::default()
+        .block(widgets::block(&app.theme, "Top Memory (MB)"))
+        .data(&process_memory_data)
+        .bar_width(8)
+        .bar_gap(1)
+        .bar_style(Style::default().fg(app.theme.status_info))
+        .value_style(
+            Style::default()
+                .fg(app.theme.text_primary)
+                .add_modifier(Modifier::BOLD),
+        )
+        .direction(Direction::Horizontal)
+        .label_style(Style::default().fg(app.theme.text_secondary));
+    frame.render_widget(process_memory_widget, sidebar[1]);
+    
     frame.render_widget(process_guidance(app, snapshot), sidebar[2]);
 }
 
@@ -135,7 +169,7 @@ fn process_table<'a>(
         ),
     )
     .row_highlight_style(selected_style)
-    .block(widgets::active_block(&app.theme, "Processes"))
+    .block(widgets::active_block(&app.theme, "Processes", app.animation_frame))
 }
 
 fn process_stats(app: &App, snapshot: &Snapshot, filtered_count: usize) -> Paragraph<'static> {
@@ -152,43 +186,13 @@ fn process_stats(app: &App, snapshot: &Snapshot, filtered_count: usize) -> Parag
     .block(widgets::block(&app.theme, "Summary"))
 }
 
-fn process_memory_barchart<'a>(app: &App, processes: &[&'a ProcessRow]) -> BarChart<'a> {
-    let data: Vec<(&str, u64)> = processes
-        .iter()
-        .take(5)
-        .map(|p| {
-            let name = if p.name.len() > 10 {
-                &p.name[..10]
-            } else {
-                &p.name
-            };
-            let name_ref: &'static str = Box::leak(name.to_string().into_boxed_str());
-            (name_ref, p.memory / (1024 * 1024)) // MB
-        })
-        .collect();
-
-    BarChart::default()
-        .block(widgets::block(&app.theme, "Top Memory (MB)"))
-        .data(&data)
-        .bar_width(8)
-        .bar_gap(1)
-        .bar_style(Style::default().fg(app.theme.status_info))
-        .value_style(
-            Style::default()
-                .fg(app.theme.text_primary)
-                .add_modifier(Modifier::BOLD),
-        )
-        .direction(Direction::Horizontal)
-        .label_style(Style::default().fg(app.theme.text_secondary))
-}
-
 fn process_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
     let note = if snapshot.cpu_usage >= 90.0 {
-        "CPU alert threshold exceeded"
+        "⚠ CPU alert threshold exceeded"
     } else if collectors::percentage(snapshot.used_memory, snapshot.total_memory) >= 90.0 {
-        "Memory alert threshold exceeded"
+        "⚠ Memory alert threshold exceeded"
     } else {
-        "No active alert threshold"
+        "✓ All metrics within normal range"
     };
     let note_color = widgets::status_color(
         &app.theme,
@@ -199,12 +203,12 @@ fn process_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
     let items = vec![
         ListItem::new(Span::styled(note, Style::default().fg(note_color))),
         ListItem::new(""),
-        ListItem::new("`/` filters by process name"),
-        ListItem::new("`s` cycles CPU → memory → name"),
-        ListItem::new("Process actions are next phase"),
+        ListItem::new("• `/` to filter by process name"),
+        ListItem::new("• `s` cycles CPU → memory → name"),
+        ListItem::new("• `j/k` to scroll, `gg/G` top/bottom"),
     ];
 
     List::new(items)
-        .block(widgets::block(&app.theme, "Notes"))
+        .block(widgets::block(&app.theme, "Status"))
         .highlight_style(Style::default().fg(app.theme.brand))
 }

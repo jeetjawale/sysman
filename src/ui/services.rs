@@ -9,8 +9,7 @@ use ratatui::{
     },
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
-    let snapshot = app.snapshot.as_ref().unwrap();
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
 
     let sections = Layout::default()
         .direction(Direction::Horizontal)
@@ -127,7 +126,7 @@ fn service_table<'a>(
         ),
     )
     .row_highlight_style(selected_style)
-    .block(widgets::active_block(&app.theme, "Services"))
+    .block(widgets::active_block(&app.theme, "Services", app.animation_frame))
 }
 
 fn service_stats(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
@@ -176,16 +175,21 @@ fn service_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
     } else {
         "systemd access blocked"
     };
+    let headline_color = if snapshot.service_summary.is_some() {
+        app.theme.status_good
+    } else {
+        app.theme.status_error
+    };
     let items = vec![
-        ListItem::new(headline),
+        ListItem::new(Span::styled(headline, Style::default().fg(headline_color))),
         ListItem::new(""),
-        ListItem::new("CLI start/stop/restart ready"),
-        ListItem::new("Enable/disable next"),
-        ListItem::new("Inline logs coming"),
+        ListItem::new("• Use CLI for start/stop/restart"),
+        ListItem::new("• j/k to scroll through services"),
+        ListItem::new("• Failed services shown in red"),
     ];
 
     List::new(items)
-        .block(widgets::block(&app.theme, "Roadmap"))
+        .block(widgets::block(&app.theme, "Info"))
         .highlight_style(Style::default().fg(app.theme.brand))
 }
 

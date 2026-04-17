@@ -1,10 +1,11 @@
 use crate::app::App;
+use crate::ui::widgets;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     let footer = if app.filter_input {
         Line::from(vec![
             Span::styled("FILTER: ", Style::default().fg(app.theme.status_warn)),
@@ -15,17 +16,53 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
             ),
         ])
     } else {
+        let refresh_indicator = if app.is_loading {
+            format!("{} ", widgets::spinner_char(app.animation_frame))
+        } else {
+            String::new()
+        };
+
         Line::from(vec![
             Span::styled(
-                app.status_line.clone(),
+                format!("{}{}  ", refresh_indicator, app.status_line),
                 Style::default().fg(app.theme.text_primary),
             ),
             Span::styled(
-                "  |  1-7 tabs  h/l nav  j/k scroll  / filter  s sort  r refresh  q quit",
-                Style::default().fg(app.theme.text_secondary),
+                "◆",
+                Style::default().fg(app.theme.divider),
             ),
+            Span::styled(
+                format!(" {:<3} ", app.animation_frame % 60),
+                Style::default().fg(app.theme.text_dim),
+            ),
+            Span::styled(
+                "◆",
+                Style::default().fg(app.theme.divider),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                "1-7",
+                Style::default().fg(app.theme.brand).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" tabs ", Style::default().fg(app.theme.text_muted)),
+            Span::styled(
+                "h/l",
+                Style::default().fg(app.theme.brand).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" nav ", Style::default().fg(app.theme.text_muted)),
+            Span::styled(
+                "j/k",
+                Style::default().fg(app.theme.brand).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" scroll ", Style::default().fg(app.theme.text_muted)),
+            Span::styled(
+                "q",
+                Style::default().fg(app.theme.status_error).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" quit", Style::default().fg(app.theme.text_muted)),
         ])
     };
+
     frame.render_widget(
         Paragraph::new(footer)
             .style(Style::default().fg(app.theme.text_secondary))

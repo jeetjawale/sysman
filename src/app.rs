@@ -1,3 +1,4 @@
+use crate::animation::AnimationManager;
 use crate::cli::{ProcessSort, ServiceState};
 use crate::collectors::{self, ConnectionRow, ProcessRow, Snapshot};
 use crate::theme::{Theme, default_theme};
@@ -17,7 +18,7 @@ use std::io;
 use std::time::{Duration, Instant};
 use sysinfo::Networks;
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const TICK_RATE: Duration = Duration::from_millis(200);
 pub(crate) const HISTORY_CAPACITY: usize = 60;
 
@@ -48,16 +49,19 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
     loop {
         terminal.draw(|frame| app.draw(frame))?;
 
-        if event::poll(TICK_RATE)? {
-            if let Event::Key(key) = event::read()? {
-                if app.handle_key(key) {
+        if event::poll(TICK_RATE)?
+            && let Event::Key(key) = event::read()?
+                && app.handle_key(key) {
                     break;
                 }
-            }
-        }
+
+        // Tick animation frame
+        app.animation_frame = (app.animation_frame + 1) % 60;
+        app.last_tick = Instant::now();
 
         if app.last_refresh.elapsed() >= REFRESH_INTERVAL {
             app.refresh();
+            app.is_loading = false;
         }
     }
 
@@ -111,6 +115,7 @@ pub(crate) struct App {
     pub service_error: Option<String>,
     pub status_line: String,
     pub last_refresh: Instant,
+    pub last_tick: Instant,
     pub process_scroll: usize,
     pub network_scroll: usize,
     pub connection_scroll: usize,
@@ -125,16 +130,28 @@ pub(crate) struct App {
     pub networks: Networks,
     pub interfaces: Vec<NetworkInterfaceView>,
     pub connections: Vec<ConnectionRow>,
+    pub animation_frame: u32,
+    pub is_loading: bool,
+    pub anim_manager: AnimationManager,
+    pub tab_transition: Option<(Tab, u32)>, // (from_tab, start_frame)
+    sys: sysinfo::System,
+    // Cache for BarChart labels to avoid Box::leak
+    pub process_chart_labels: Vec<String>,
+    pub disk_chart_labels: Vec<String>,
 }
 
 impl App {
     fn new() -> Self {
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_all();
+        sys.refresh_cpu_usage();
         Self {
             active_tab: Tab::Dashboard,
             snapshot: None,
             service_error: None,
             status_line: "Loading system snapshot...".into(),
             last_refresh: Instant::now() - REFRESH_INTERVAL,
+            last_tick: Instant::now(),
             process_scroll: 0,
             network_scroll: 0,
             connection_scroll: 0,
@@ -149,6 +166,13 @@ impl App {
             networks: Networks::new_with_refreshed_list(),
             interfaces: Vec::new(),
             connections: Vec::new(),
+            animation_frame: 0,
+            is_loading: true,
+            anim_manager: AnimationManager::new(),
+            tab_transition: None,
+            sys,
+            process_chart_labels: Vec::new(),
+            disk_chart_labels: Vec::new(),
         }
     }
 
@@ -157,10 +181,10 @@ impl App {
     pub(crate) fn refresh(&mut self) {
         let elapsed = self.last_refresh.elapsed().as_secs_f64().max(1.0);
 
-        match collectors::collect_snapshot(ServiceState::Running, 200) {
+        match collectors::collect_snapshot(&mut self.sys, ServiceState::Running, 200) {
             Ok(mut snapshot) => {
                 snapshot.processes =
-                    collectors::procs::collect_processes(200, self.process_sort);
+                    collectors::procs::collect_processes(&self.sys, 200, self.process_sort);
                 self.service_error =
                     if snapshot.services.is_empty() && cfg!(target_os = "linux") {
                         Some(
@@ -182,8 +206,8 @@ impl App {
                     snapshot.host,
                     snapshot.cpu_usage,
                     collectors::percentage(snapshot.used_memory, snapshot.total_memory),
-                    format_rate(self.total_rx_rate()),
-                    format_rate(self.total_tx_rate()),
+                    ui::widgets::format_rate(self.total_rx_rate()),
+                    ui::widgets::format_rate(self.total_tx_rate()),
                 );
                 self.snapshot = Some(snapshot);
             }
@@ -278,6 +302,7 @@ impl App {
     }
 
     pub(crate) fn next_tab(&mut self) {
+        let from = self.active_tab;
         self.active_tab = match self.active_tab {
             Tab::Dashboard => Tab::System,
             Tab::System => Tab::Processes,
@@ -287,9 +312,12 @@ impl App {
             Tab::Services => Tab::Help,
             Tab::Help => Tab::Dashboard,
         };
+        self.tab_transition = Some((from, self.animation_frame));
+        self.anim_manager.start("tab_slide", 0.0, 1.0, 200);
     }
 
     pub(crate) fn previous_tab(&mut self) {
+        let from = self.active_tab;
         self.active_tab = match self.active_tab {
             Tab::Dashboard => Tab::Help,
             Tab::System => Tab::Dashboard,
@@ -299,6 +327,8 @@ impl App {
             Tab::Services => Tab::Disks,
             Tab::Help => Tab::Services,
         };
+        self.tab_transition = Some((from, self.animation_frame));
+        self.anim_manager.start("tab_slide", 0.0, 1.0, 200);
     }
 
     pub(crate) fn scroll_down(&mut self) {
@@ -369,7 +399,7 @@ impl App {
 
     // -- Drawing -----------------------------------------------------------
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let main_area = Layout::default()
             .direction(Direction::Vertical)
@@ -386,15 +416,15 @@ impl App {
         let content_area = main_area[1];
         let footer_area = main_area[2];
 
-        if self.snapshot.is_some() {
+        if let Some(snapshot) = self.snapshot.clone() {
             match self.active_tab {
-                Tab::Dashboard => ui::dashboard::draw(frame, content_area, self),
-                Tab::System => ui::system::draw(frame, content_area, self),
-                Tab::Processes => ui::processes::draw(frame, content_area, self),
-                Tab::Network => ui::network::draw(frame, content_area, self),
-                Tab::Disks => ui::disks::draw(frame, content_area, self),
-                Tab::Services => ui::services::draw(frame, content_area, self),
-                Tab::Help => ui::help::draw(frame, content_area, self),
+                Tab::Dashboard => ui::dashboard::draw(frame, content_area, self, &snapshot),
+                Tab::System => ui::system::draw(frame, content_area, self, &snapshot),
+                Tab::Processes => ui::processes::draw(frame, content_area, self, &snapshot),
+                Tab::Network => ui::network::draw(frame, content_area, self, &snapshot),
+                Tab::Disks => ui::disks::draw(frame, content_area, self, &snapshot),
+                Tab::Services => ui::services::draw(frame, content_area, self, &snapshot),
+                Tab::Help => ui::help::draw(frame, content_area, self, &snapshot),
             }
         } else {
             frame.render_widget(
@@ -487,8 +517,4 @@ fn push_history_value(history: &mut VecDeque<u64>, value: u64) {
         history.pop_front();
     }
     history.push_back(value);
-}
-
-fn format_rate(bytes_per_second: u64) -> String {
-    format!("{}/s", collectors::format_bytes(bytes_per_second))
 }

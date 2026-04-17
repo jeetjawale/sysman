@@ -6,15 +6,15 @@ use ratatui::{
     widgets::{Paragraph, Sparkline},
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
-    let snapshot = app.snapshot.as_ref().unwrap();
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(5),
+            Constraint::Length(5),
             Constraint::Length(6),
-            Constraint::Length(9),
-            Constraint::Min(12),
+            Constraint::Min(10),
         ])
         .split(area);
 
@@ -27,8 +27,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(system_identity(app, snapshot), top[0]);
     frame.render_widget(system_runtime(app, snapshot), top[1]);
 
-    // -- Middle: resource gauges -------------------------------------------
-    let middle = Layout::default()
+    // -- Resource gauges ----------------------------------------------------
+    let gauges = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage(34),
@@ -38,46 +38,90 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .split(sections[1]);
 
     frame.render_widget(
-        widgets::line_gauge_panel(
+        widgets::gauge_card(
             &app.theme,
             "CPU",
-            snapshot.cpu_usage as f64 / 100.0,
-            app.theme.status_info,
+            snapshot.cpu_usage as f64,
             &format!("{:.1}% total", snapshot.cpu_usage),
+            app.theme.status_info,
+            app.animation_frame,
         ),
-        middle[0],
+        gauges[0],
     );
     frame.render_widget(
-        widgets::line_gauge_panel(
+        widgets::gauge_card(
             &app.theme,
             "Memory",
-            collectors::percentage(snapshot.used_memory, snapshot.total_memory) / 100.0,
-            app.theme.status_warn,
+            collectors::percentage(snapshot.used_memory, snapshot.total_memory),
             &format!(
                 "{} / {}",
                 collectors::format_bytes(snapshot.used_memory),
                 collectors::format_bytes(snapshot.total_memory)
             ),
+            app.theme.status_warn,
+            app.animation_frame,
         ),
-        middle[1],
+        gauges[1],
     );
     frame.render_widget(
-        widgets::line_gauge_panel(
+        widgets::gauge_card(
             &app.theme,
             "Swap",
-            collectors::percentage(snapshot.used_swap, snapshot.total_swap) / 100.0,
-            app.theme.status_error,
+            collectors::percentage(snapshot.used_swap, snapshot.total_swap),
             &format!(
                 "{} / {}",
                 collectors::format_bytes(snapshot.used_swap),
                 collectors::format_bytes(snapshot.total_swap)
             ),
+            app.theme.status_error,
+            app.animation_frame,
         ),
-        middle[2],
+        gauges[2],
+    );
+
+    // -- Sparkline trends ---------------------------------------------------
+    let trends = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .split(sections[2]);
+
+    frame.render_widget(
+        widgets::spark_panel(
+            &app.theme,
+            "CPU History",
+            &app.histories.cpu_total,
+            app.theme.status_info,
+            app.animation_frame,
+        ),
+        trends[0],
+    );
+    frame.render_widget(
+        widgets::spark_panel(
+            &app.theme,
+            "Memory History",
+            &app.histories.memory_used,
+            app.theme.status_warn,
+            app.animation_frame,
+        ),
+        trends[1],
+    );
+    frame.render_widget(
+        widgets::spark_panel(
+            &app.theme,
+            "Swap History",
+            &app.histories.swap_used,
+            app.theme.status_error,
+            app.animation_frame,
+        ),
+        trends[2],
     );
 
     // -- Bottom: per-core sparkline grid -----------------------------------
-    render_per_core_grid(frame, sections[2], app, snapshot);
+    render_per_core_grid(frame, sections[3], app, snapshot);
 }
 
 // ---------------------------------------------------------------------------

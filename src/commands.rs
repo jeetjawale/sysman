@@ -17,7 +17,9 @@ pub fn execute(command: Command) -> Result<()> {
 }
 
 fn print_summary() -> Result<()> {
-    let snapshot = collectors::collect_snapshot(ServiceState::Running, 10)?;
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let snapshot = collectors::collect_snapshot(&mut sys, ServiceState::Running, 10)?;
 
     println!("System Summary");
     println!("==============");
@@ -145,7 +147,8 @@ fn print_disks() -> Result<()> {
 }
 
 fn print_processes(limit: usize, sort: ProcessSort) -> Result<()> {
-    let processes = collectors::procs::collect_processes(limit, sort);
+    let sys = sysinfo::System::new_all();
+    let processes = collectors::procs::collect_processes(&sys, limit, sort);
 
     println!("Processes");
     println!("=========");

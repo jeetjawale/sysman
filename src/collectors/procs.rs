@@ -1,6 +1,6 @@
 use crate::cli::ProcessSort;
 use std::cmp::Reverse;
-use sysinfo::{ProcessesToUpdate, System};
+use sysinfo::System;
 
 /// A single process row for display.
 #[derive(Debug, Clone)]
@@ -13,10 +13,7 @@ pub struct ProcessRow {
 }
 
 /// Collect the top `limit` processes sorted by `sort`.
-pub fn collect_processes(limit: usize, sort: ProcessSort) -> Vec<ProcessRow> {
-    let mut system = System::new_all();
-    system.refresh_processes(ProcessesToUpdate::All, true);
-
+pub fn collect_processes(system: &System, limit: usize, sort: ProcessSort) -> Vec<ProcessRow> {
     let mut processes: Vec<_> = system.processes().iter().collect();
     match sort {
         ProcessSort::Cpu => processes.sort_by(|a, b| {

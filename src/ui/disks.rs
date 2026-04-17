@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::collectors::{self, Snapshot};
+use crate::collectors::{self, DiskRow, Snapshot};
 use crate::ui::widgets;
 use ratatui::{
     prelude::*,
@@ -9,7 +9,17 @@ use ratatui::{
     },
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) {
+    // Rebuild disk label cache early to avoid Box::leak
+    let labels: Vec<String> = {
+        let snapshot = app.snapshot.as_ref().unwrap();
+        snapshot.disks.iter().take(5).map(|d| {
+            d.mount.rsplit('/').next().unwrap_or(&d.mount).to_string()
+        }).collect()
+    };
+    app.disk_chart_labels.clear();
+    app.disk_chart_labels.extend(labels);
+
     let snapshot = app.snapshot.as_ref().unwrap();
 
     let sections = Layout::default()
@@ -46,7 +56,29 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(disk_stats(app, snapshot), sidebar[0]);
     frame.render_widget(disk_hotspots(app, snapshot), sidebar[1]);
-    frame.render_widget(disk_barchart(app, snapshot), sidebar[2]);
+    
+    // Build disk usage barchart using cached labels
+    let disk_data: Vec<(&str, u64)> = app.disk_chart_labels
+        .iter()
+        .zip(snapshot.disks.iter().take(5))
+        .map(|(label, d): (&String, &DiskRow)| (label.as_str(), d.usage as u64))
+        .collect();
+    let disk_widget = BarChart::default()
+        .block(widgets::block(&app.theme, "Usage by Mount"))
+        .data(&disk_data)
+        .max(100)
+        .bar_width(7)
+        .bar_gap(1)
+        .bar_style(Style::default().fg(app.theme.status_warn))
+        .value_style(
+            Style::default()
+                .fg(app.theme.text_primary)
+                .add_modifier(Modifier::BOLD),
+        )
+        .direction(Direction::Horizontal)
+        .label_style(Style::default().fg(app.theme.text_secondary));
+    frame.render_widget(disk_widget, sidebar[2]);
+    
     frame.render_widget(disk_guidance(app), sidebar[3]);
 }
 
@@ -106,7 +138,7 @@ fn disk_table<'a>(
         ),
     )
     .row_highlight_style(selected_style)
-    .block(widgets::active_block(&app.theme, "Disk Usage"))
+    .block(widgets::active_block(&app.theme, "Disk Usage", app.animation_frame))
 }
 
 fn disk_stats(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
@@ -137,44 +169,22 @@ fn disk_hotspots(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
     Paragraph::new(lines).block(widgets::block(&app.theme, "Hotspots"))
 }
 
-fn disk_barchart<'a>(app: &App, snapshot: &'a Snapshot) -> BarChart<'a> {
-    let data: Vec<(&str, u64)> = snapshot
-        .disks
-        .iter()
-        .take(5)
-        .map(|d| {
-            let label = d.mount.rsplit('/').next().unwrap_or(&d.mount);
-            let label_ref: &'static str = Box::leak(label.to_string().into_boxed_str());
-            (label_ref, d.usage as u64)
-        })
-        .collect();
-
-    BarChart::default()
-        .block(widgets::block(&app.theme, "Usage by Mount"))
-        .data(&data)
-        .max(100)
-        .bar_width(7)
-        .bar_gap(1)
-        .bar_style(Style::default().fg(app.theme.status_warn))
-        .value_style(
-            Style::default()
-                .fg(app.theme.text_primary)
-                .add_modifier(Modifier::BOLD),
-        )
-        .direction(Direction::Horizontal)
-        .label_style(Style::default().fg(app.theme.text_secondary))
-}
-
 fn disk_guidance(app: &App) -> List<'_> {
     let items = vec![
-        ListItem::new("Per-partition usage is live"),
-        ListItem::new("I/O speed is next"),
-        ListItem::new("ncdu-style browsing planned"),
-        ListItem::new("SMART health coming"),
+        ListItem::new(Span::styled(
+            "Disk Health Tips",
+            Style::default()
+                .fg(app.theme.brand)
+                .add_modifier(Modifier::BOLD),
+        )),
+        ListItem::new(""),
+        ListItem::new("• Keep usage below 80%"),
+        ListItem::new("• Monitor /home and / closely"),
+        ListItem::new("• Use `df -h` for quick check"),
     ];
 
     List::new(items)
-        .block(widgets::block(&app.theme, "Roadmap"))
+        .block(widgets::block(&app.theme, "Tips"))
         .highlight_style(Style::default().fg(app.theme.brand))
 }
 

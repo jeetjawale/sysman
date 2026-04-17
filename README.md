@@ -1,6 +1,6 @@
 # Sysman
 
-`sysman` is a system management CLI for inspecting machine health from the terminal. It now ships with an interactive TUI inspired by `netwatch-main`, but focused on host state instead of network diagnostics.
+`sysman` is a terminal-based system monitoring and management tool. It ships with a rich interactive TUI for real-time inspection of CPU, memory, disk, network, processes, and systemd services.
 
 ## Features
 

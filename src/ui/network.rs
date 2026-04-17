@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::collectors;
+use crate::collectors::{self, Snapshot};
 use crate::ui::widgets;
 use ratatui::{
     prelude::*,
@@ -8,7 +8,7 @@ use ratatui::{
     },
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) {
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -35,6 +35,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
             &widgets::format_rate(app.total_rx_rate()),
             "aggregate inbound",
             app.theme.status_good,
+            app.animation_frame,
         ),
         top[0],
     );
@@ -45,6 +46,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
             &widgets::format_rate(app.total_tx_rate()),
             "aggregate outbound",
             app.theme.status_info,
+            app.animation_frame,
         ),
         top[1],
     );
@@ -55,6 +57,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
             &app.connections.len().to_string(),
             "ss-style snapshot",
             app.theme.brand,
+            app.animation_frame,
         ),
         top[2],
     );
