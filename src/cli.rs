@@ -54,6 +54,7 @@ pub enum Command {
 pub enum ProcessSort {
     Cpu,
     Memory,
+    Pid,
     Name,
 }
 

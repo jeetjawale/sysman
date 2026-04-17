@@ -1,5 +1,5 @@
-use crate::app::App;
-use crate::collectors::{self, ProcessRow, Snapshot};
+use crate::app::{App, ProcessViewRow};
+use crate::collectors::{self, Snapshot};
 use crate::ui::widgets;
 use ratatui::{
     prelude::*,
@@ -11,21 +11,25 @@ use ratatui::{
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     // Rebuild process label cache early to avoid Box::leak
-    // Collect names first, then drop the filtered reference
+    // Collect names first, then drop the view rows reference
     let names: Vec<String> = {
-        let filtered = app.filtered_processes(snapshot);
-        filtered.iter().take(5).map(|p| {
-            if p.name.len() > 10 {
-                p.name[..10].to_string()
-            } else {
-                p.name.clone()
-            }
-        }).collect()
+        let rows = app.process_view_rows(snapshot);
+        rows.iter()
+            .take(5)
+            .map(|row| {
+                let p = row.process;
+                if p.name.len() > 10 {
+                    p.name[..10].to_string()
+                } else {
+                    p.name.clone()
+                }
+            })
+            .collect()
     };
     app.process_chart_labels.clear();
     app.process_chart_labels.extend(names);
 
-    let filtered = app.filtered_processes(snapshot);
+    let view_rows = app.process_view_rows(snapshot);
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
@@ -48,6 +52,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
                 &app.process_filter
             },
         ),
+        widgets::kv_line(&app.theme, "View", app.process_view_label()),
     ])
     .block(widgets::block(&app.theme, "Process Controls"));
     frame.render_widget(header, sections[0]);
@@ -61,7 +66,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     let mut table_state = TableState::default();
     table_state.select(Some(app.process_scroll));
     frame.render_stateful_widget(
-        process_table(app, &filtered, app.process_scroll, widgets::visible_rows(bottom[0], 4)),
+        process_table(
+            app,
+            &view_rows,
+            app.process_scroll,
+            widgets::visible_rows(bottom[0], 4),
+        ),
         bottom[0],
         &mut table_state,
     );
@@ -69,7 +79,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .thumb_style(Style::default().fg(app.theme.brand))
         .track_style(Style::default().fg(app.theme.border));
-    let mut scrollbar_state = ScrollbarState::new(filtered.len())
+    let mut scrollbar_state = ScrollbarState::new(view_rows.len())
         .position(app.process_scroll)
         .viewport_content_length(widgets::visible_rows(bottom[0], 4));
     frame.render_stateful_widget(scrollbar, bottom[0], &mut scrollbar_state);
@@ -84,13 +94,14 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ])
         .split(bottom[1]);
 
-    frame.render_widget(process_stats(app, snapshot, filtered.len()), sidebar[0]);
-    
+    frame.render_widget(process_stats(app, snapshot, view_rows.len()), sidebar[0]);
+
     // Build process memory barchart using cached labels
-    let process_memory_data: Vec<(&str, u64)> = app.process_chart_labels
+    let process_memory_data: Vec<(&str, u64)> = app
+        .process_chart_labels
         .iter()
-        .zip(filtered.iter().take(5))
-        .map(|(label, p)| (label.as_str(), p.memory / (1024 * 1024)))
+        .zip(view_rows.iter().take(5))
+        .map(|(label, row)| (label.as_str(), row.process.memory / (1024 * 1024)))
         .collect();
     let process_memory_widget = BarChart::default()
         .block(widgets::block(&app.theme, "Top Memory (MB)"))
@@ -106,7 +117,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .direction(Direction::Horizontal)
         .label_style(Style::default().fg(app.theme.text_secondary));
     frame.render_widget(process_memory_widget, sidebar[1]);
-    
+
     frame.render_widget(process_guidance(app, snapshot), sidebar[2]);
 }
 
@@ -116,16 +127,17 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
 
 fn process_table<'a>(
     app: &App,
-    processes: &[&'a ProcessRow],
+    rows: &[ProcessViewRow<'a>],
     offset: usize,
     height: usize,
 ) -> Table<'a> {
-    let rows: Vec<Row> = processes
+    let rows: Vec<Row> = rows
         .iter()
         .enumerate()
-        .skip(offset.min(processes.len()))
+        .skip(offset.min(rows.len()))
         .take(height)
-        .map(|(idx, process)| {
+        .map(|(idx, row)| {
+            let process = row.process;
             let cpu_color = widgets::status_color(&app.theme, process.cpu as f64);
             let mem_pct = (process.memory as f64 / (1024.0 * 1024.0 * 1024.0)).min(100.0);
             let mem_color = widgets::status_color(&app.theme, mem_pct);
@@ -134,11 +146,16 @@ fn process_table<'a>(
             } else {
                 Style::default().bg(app.theme.alt_row_bg)
             };
+            let name = if row.depth == 0 {
+                collectors::truncate(&process.name, 28)
+            } else {
+                let prefix = format!("{}└ ", "  ".repeat(row.depth.min(6)));
+                collectors::truncate(&(prefix + &process.name), 28)
+            };
             Row::new(vec![
                 Cell::from(process.pid.clone()),
-                Cell::from(collectors::truncate(&process.name, 28)),
-                Cell::from(format!("{:.1}", process.cpu))
-                    .style(Style::default().fg(cpu_color)),
+                Cell::from(name),
+                Cell::from(format!("{:.1}", process.cpu)).style(Style::default().fg(cpu_color)),
                 Cell::from(collectors::format_bytes(process.memory))
                     .style(Style::default().fg(mem_color)),
                 Cell::from(process.status.clone()),
@@ -169,19 +186,24 @@ fn process_table<'a>(
         ),
     )
     .row_highlight_style(selected_style)
-    .block(widgets::active_block(&app.theme, "Processes", app.animation_frame))
+    .block(widgets::active_block(
+        &app.theme,
+        "Processes",
+        app.animation_frame,
+    ))
 }
 
 fn process_stats(app: &App, snapshot: &Snapshot, filtered_count: usize) -> Paragraph<'static> {
     Paragraph::new(vec![
         widgets::kv_line(&app.theme, "Loaded", &snapshot.processes.len().to_string()),
-        widgets::kv_line(&app.theme, "Filtered", &filtered_count.to_string()),
+        widgets::kv_line(&app.theme, "Visible", &filtered_count.to_string()),
         widgets::kv_line(&app.theme, "Count", &snapshot.process_count.to_string()),
         widgets::kv_line(
             &app.theme,
             "Sort",
             widgets::process_sort_label(app.process_sort),
         ),
+        widgets::kv_line(&app.theme, "View", app.process_view_label()),
     ])
     .block(widgets::block(&app.theme, "Summary"))
 }
@@ -196,15 +218,19 @@ fn process_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
     };
     let note_color = widgets::status_color(
         &app.theme,
-        (snapshot.cpu_usage as f64)
-            .max(collectors::percentage(snapshot.used_memory, snapshot.total_memory)),
+        (snapshot.cpu_usage as f64).max(collectors::percentage(
+            snapshot.used_memory,
+            snapshot.total_memory,
+        )),
     );
 
     let items = vec![
         ListItem::new(Span::styled(note, Style::default().fg(note_color))),
         ListItem::new(""),
         ListItem::new("• `/` to filter by process name"),
-        ListItem::new("• `s` cycles CPU → memory → name"),
+        ListItem::new("• `s` cycles CPU → memory → pid → name"),
+        ListItem::new("• `p` cycles view: flat → tree → user"),
+        ListItem::new("• `x` term, `z` kill, `n` renice selected"),
         ListItem::new("• `j/k` to scroll, `gg/G` top/bottom"),
     ];
 
