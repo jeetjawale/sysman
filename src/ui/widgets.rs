@@ -2,9 +2,7 @@ use crate::collectors::{self, DiskRow, Snapshot};
 use crate::theme::Theme;
 use ratatui::{
     prelude::*,
-    widgets::{
-        Block, BorderType, Borders, Gauge, Padding, Paragraph, Sparkline,
-    },
+    widgets::{Block, BorderType, Borders, Gauge, Padding, Paragraph, Sparkline},
 };
 use std::collections::VecDeque;
 
@@ -39,7 +37,13 @@ pub fn blend_colors(a: Color, b: Color, t: f32) -> Color {
             (g1 as f32 * (1.0 - t) + g2 as f32 * t) as u8,
             (b1 as f32 * (1.0 - t) + b2 as f32 * t) as u8,
         ),
-        _ => if t < 0.5 { a } else { b },
+        _ => {
+            if t < 0.5 {
+                a
+            } else {
+                b
+            }
+        }
     }
 }
 
@@ -298,6 +302,7 @@ pub fn process_sort_label(sort: crate::cli::ProcessSort) -> &'static str {
     match sort {
         crate::cli::ProcessSort::Cpu => "cpu",
         crate::cli::ProcessSort::Memory => "memory",
+        crate::cli::ProcessSort::Pid => "pid",
         crate::cli::ProcessSort::Name => "name",
     }
 }

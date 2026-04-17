@@ -3,9 +3,7 @@ use crate::collectors::{self, Snapshot};
 use crate::ui::widgets;
 use ratatui::{
     prelude::*,
-    widgets::{
-        Cell, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
-    },
+    widgets::{Cell, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState},
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) {
@@ -66,7 +64,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
     let mut iface_state = TableState::default();
     iface_state.select(Some(app.network_scroll));
     frame.render_stateful_widget(
-        interface_table(app, app.network_scroll, widgets::visible_rows(sections[1], 4)),
+        interface_table(
+            app,
+            app.network_scroll,
+            widgets::visible_rows(sections[1], 4),
+        ),
         sections[1],
         &mut iface_state,
     );
@@ -82,7 +84,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
     let mut conn_state = TableState::default();
     conn_state.select(Some(app.connection_scroll));
     frame.render_stateful_widget(
-        connection_table(app, app.connection_scroll, widgets::visible_rows(sections[2], 4)),
+        connection_table(
+            app,
+            app.connection_scroll,
+            widgets::visible_rows(sections[2], 4),
+        ),
         sections[2],
         &mut conn_state,
     );
@@ -113,8 +119,7 @@ fn interface_table(app: &App, offset: usize, height: usize) -> Table<'static> {
                 Style::default().bg(app.theme.alt_row_bg)
             };
             Row::new(vec![
-                Cell::from(iface.name.clone())
-                    .style(Style::default().fg(app.theme.brand)),
+                Cell::from(iface.name.clone()).style(Style::default().fg(app.theme.brand)),
                 Cell::from(collectors::truncate(&iface.addresses, 28)),
                 Cell::from(widgets::format_rate(iface.rx_rate))
                     .style(Style::default().fg(app.theme.status_good)),

@@ -7,7 +7,6 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
-
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

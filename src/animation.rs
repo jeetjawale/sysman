@@ -30,12 +30,15 @@ impl AnimationManager {
 
     /// Start a new animation or replace existing one
     pub fn start(&mut self, name: impl Into<String>, start: f32, end: f32, duration_ms: u64) {
-        self.active.insert(name.into(), AnimationState {
-            start_time: Instant::now(),
-            start_value: start,
-            end_value: end,
-            duration_ms,
-        });
+        self.active.insert(
+            name.into(),
+            AnimationState {
+                start_time: Instant::now(),
+                start_value: start,
+                end_value: end,
+                duration_ms,
+            },
+        );
     }
 
     /// Get current interpolated value of an animation, None if not active or complete

@@ -8,7 +8,6 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
-
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -31,14 +30,14 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .split(sections[0]);
 
     let mem_pct = collectors::percentage(snapshot.used_memory, snapshot.total_memory);
-    
+
     // Animate metric cards with pulsing effect when critical (TODO: wire up to gauge)
     let _pulse_cpu = if app.animation_frame % 30 < 15 && snapshot.cpu_usage >= 85.0 {
         widgets::pulse_opacity(app.animation_frame)
     } else {
         1.0
     };
-    
+
     frame.render_widget(
         widgets::gauge_card(
             &app.theme,
@@ -50,7 +49,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ),
         metrics[0],
     );
-    
+
     frame.render_widget(
         widgets::gauge_card(
             &app.theme,
@@ -66,7 +65,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ),
         metrics[1],
     );
-    
+
     frame.render_widget(
         widgets::metric_card(
             &app.theme,
@@ -78,7 +77,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ),
         metrics[2],
     );
-    
+
     frame.render_widget(
         widgets::metric_card(
             &app.theme,
@@ -90,7 +89,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ),
         metrics[3],
     );
-    
+
     frame.render_widget(
         widgets::metric_card(
             &app.theme,
@@ -123,7 +122,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ),
         middle[0],
     );
-    
+
     frame.render_widget(
         widgets::spark_panel(
             &app.theme,
@@ -134,7 +133,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ),
         middle[1],
     );
-    
+
     frame.render_widget(network_chart(app), middle[2]);
 
     // -- Bottom: overview previews with enhanced layout --------
@@ -223,10 +222,10 @@ fn process_preview(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
         "Sort",
         widgets::process_sort_label(app.process_sort),
     )];
-    
+
     for (_idx, process) in snapshot.processes.iter().take(5).enumerate() {
         // TODO: Use _row_bg to highlight alternating rows for better readability
-        
+
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{:>5.1}% ", process.cpu),
@@ -251,7 +250,7 @@ fn network_preview(app: &App) -> Paragraph<'static> {
         } else {
             app.theme.status_good
         };
-        
+
         lines.push(Line::from(vec![
             Span::styled(
                 collectors::truncate(&iface.name, 10),
