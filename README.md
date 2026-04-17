@@ -1,16 +1,14 @@
 # Sysman
 
-`sysman` is a terminal-based system monitoring and management tool. It ships with a rich interactive TUI for real-time inspection of CPU, memory, disk, network, processes, and systemd services.
+`sysman` is a terminal system monitor with a TUI and CLI.
 
-## Features
+## Currently available
 
-- Interactive TUI dashboard with tab navigation and periodic refresh
-- System summary with host, OS, uptime, CPU, memory, swap, and disk pressure
-- Detailed system information view
-- Memory and swap inspection
-- Mounted disk usage reporting
-- Top process listing sorted by CPU, memory, or name
-- Linux `systemd` service listing and service actions
+- Interactive TUI with tabs for dashboard, system, network, disks, processes, services, and help
+- Live system vitals: CPU, memory, swap, disk usage, network throughput, uptime, host/OS info
+- Process table with sorting and filtering
+- Service listing on Linux `systemd` hosts
+- CLI commands for summary, system, memory, disks, processes, services, and service actions
 
 ## Usage
 
@@ -45,5 +43,5 @@ Commands:
 ## Notes
 
 - Running `sysman` with no command launches the TUI.
-- Service management currently targets Linux hosts that use `systemd`.
-- `start`, `stop`, and `restart` actions may require elevated privileges depending on the target service.
+- Service management targets Linux hosts using `systemd`.
+- `start`, `stop`, and `restart` may require elevated privileges.
