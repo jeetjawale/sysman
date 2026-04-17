@@ -1,7 +1,10 @@
 mod app;
 mod cli;
+pub(crate) mod collectors;
 mod commands;
+mod event;
 mod theme;
+mod ui;
 
 use anyhow::Result;
 use clap::Parser;
