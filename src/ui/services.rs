@@ -10,7 +10,6 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
-
     let sections = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
@@ -43,13 +42,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .constraints([
             Constraint::Length(6),
             Constraint::Length(7),
-            Constraint::Min(8),
+            Constraint::Length(6),
+            Constraint::Min(9),
         ])
         .split(sections[1]);
 
     frame.render_widget(service_stats(app, snapshot), sidebar[0]);
     frame.render_widget(service_focus(app, snapshot), sidebar[1]);
     frame.render_widget(service_guidance(app, snapshot), sidebar[2]);
+    frame.render_widget(service_logs(app, snapshot), sidebar[3]);
 
     // -- Error popup (if service data unavailable) --------------------------
     if let Some(error) = &app.service_error {
@@ -98,8 +99,11 @@ fn service_table<'a>(
             };
             Row::new(vec![
                 Cell::from(collectors::truncate(&service.name, 36)),
-                Cell::from(service.active.clone())
-                    .style(Style::default().fg(active_color).add_modifier(Modifier::BOLD)),
+                Cell::from(service.active.clone()).style(
+                    Style::default()
+                        .fg(active_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Cell::from(service.sub.clone()),
             ])
             .style(row_style)
@@ -126,7 +130,11 @@ fn service_table<'a>(
         ),
     )
     .row_highlight_style(selected_style)
-    .block(widgets::active_block(&app.theme, "Services", app.animation_frame))
+    .block(widgets::active_block(
+        &app.theme,
+        "Services",
+        app.animation_frame,
+    ))
 }
 
 fn service_stats(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
@@ -183,14 +191,39 @@ fn service_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
     let items = vec![
         ListItem::new(Span::styled(headline, Style::default().fg(headline_color))),
         ListItem::new(""),
-        ListItem::new("• Use CLI for start/stop/restart"),
-        ListItem::new("• j/k to scroll through services"),
-        ListItem::new("• Failed services shown in red"),
+        ListItem::new("• `u/i/o` start/stop/restart"),
+        ListItem::new("• `e/d` enable/disable"),
     ];
 
     List::new(items)
         .block(widgets::block(&app.theme, "Info"))
         .highlight_style(Style::default().fg(app.theme.brand))
+}
+
+fn service_logs(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
+    let mut lines: Vec<Line> = Vec::new();
+    let selected = app
+        .selected_service_name(snapshot)
+        .unwrap_or_else(|| "none".into());
+    lines.push(widgets::kv_line(&app.theme, "Service", &selected));
+    lines.push(Line::from(""));
+
+    if let Some(error) = &app.service_logs_error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(app.theme.status_error),
+        )));
+    } else if app.service_logs.is_empty() {
+        lines.push(Line::from("No journal lines"));
+    } else {
+        for line in &app.service_logs {
+            lines.push(Line::from(collectors::truncate(line, 70)));
+        }
+    }
+
+    Paragraph::new(lines)
+        .block(widgets::block(&app.theme, "Journalctl (last 8)"))
+        .wrap(Wrap { trim: false })
 }
 
 fn service_row_style(app: &App, service: &ServiceRow) -> Style {

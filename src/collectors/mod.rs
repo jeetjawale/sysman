@@ -1,13 +1,14 @@
 pub mod host;
+pub mod logs;
 pub mod netstat;
 pub mod procs;
 pub mod storage;
 pub mod systemd;
 
 // Re-export core types
-pub use storage::DiskRow;
 pub use netstat::ConnectionRow;
 pub use procs::ProcessRow;
+pub use storage::{DiskIoCounters, DiskIoRow, DiskRow};
 pub use systemd::{ServiceRow, ServiceSummary};
 
 use crate::cli::{ProcessSort, ServiceState};
@@ -41,8 +42,12 @@ pub struct Snapshot {
 }
 
 /// Collect a full system snapshot for display.
-pub fn collect_snapshot(sys: &mut System, service_state: ServiceState, process_limit: usize) -> Result<Snapshot> {
-     sys.refresh_all();
+pub fn collect_snapshot(
+    sys: &mut System,
+    service_state: ServiceState,
+    process_limit: usize,
+) -> Result<Snapshot> {
+    sys.refresh_all();
     sys.refresh_processes(ProcessesToUpdate::All, true);
     sys.refresh_cpu_usage();
 

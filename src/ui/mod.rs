@@ -2,6 +2,7 @@ pub mod dashboard;
 pub mod disks;
 pub mod footer;
 pub mod help;
+pub mod logs;
 pub mod network;
 pub mod processes;
 pub mod services;

@@ -97,6 +97,40 @@ pub fn run_systemctl(args: &[&str]) -> Result<String> {
     }
 }
 
+/// Collect recent journal lines for a service.
+pub fn collect_service_logs(service: &str, lines: usize) -> Result<Vec<String>> {
+    ensure_linux_systemd()?;
+    let output = ProcessCommand::new("journalctl")
+        .args([
+            "-u",
+            service,
+            "-n",
+            &lines.to_string(),
+            "--no-pager",
+            "--output=short",
+        ])
+        .output()
+        .with_context(|| format!("failed to invoke journalctl for service {service}"))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| line.to_string())
+            .collect())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(anyhow!(
+            "journalctl -u {} failed: {}",
+            service,
+            if stderr.is_empty() {
+                "unknown error"
+            } else {
+                &stderr
+            }
+        ))
+    }
+}
+
 fn parse_service_line(line: &str) -> Option<ServiceRow> {
     if line.trim().is_empty() {
         return None;
