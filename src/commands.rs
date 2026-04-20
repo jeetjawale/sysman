@@ -72,6 +72,7 @@ fn print_summary() -> Result<()> {
 fn print_system() -> Result<()> {
     let mut system = System::new_all();
     system.refresh_all();
+    let hardware = collectors::host::collect_hardware_info();
 
     println!("System Information");
     println!("==================");
@@ -93,6 +94,35 @@ fn print_system() -> Result<()> {
     println!("Boot Time: {}", System::boot_time());
     println!("CPU Cores: {}", system.cpus().len());
     println!("Process Count: {}", system.processes().len());
+    println!("CPU Model: {}", hardware.cpu_model);
+    println!("CPU Cache: {}", hardware.cpu_cache);
+    if let Some(temp) = hardware.temperatures.first() {
+        println!("Temperature: {temp}");
+    }
+    if let Some(gpu) = hardware.gpu_info.first() {
+        println!("GPU: {gpu}");
+    }
+    if let Some(battery) = hardware.battery_info.first() {
+        println!("Battery: {battery}");
+    }
+    if let Some(user) = hardware.login_users.first() {
+        println!("Logged-in User: {user}");
+    }
+    if let Some(login) = hardware.login_history.first() {
+        println!("Last Login: {login}");
+    }
+    if let Some(ssh) = hardware.ssh_sessions.first() {
+        println!("SSH Session: {ssh}");
+    }
+    if let Some(failed) = hardware.failed_logins.first() {
+        println!("Failed Login: {failed}");
+    }
+    if let Some(firewall) = hardware.firewall_status.first() {
+        println!("Firewall: {firewall}");
+    }
+    if let Some(module) = hardware.security_modules.first() {
+        println!("Security Module: {module}");
+    }
 
     Ok(())
 }

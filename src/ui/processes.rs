@@ -1,11 +1,11 @@
-use crate::app::{App, ProcessViewRow};
+use crate::app::{App, ProcessViewRow, Tab};
 use crate::collectors::{self, Snapshot};
 use crate::ui::widgets;
 use ratatui::{
     prelude::*,
     widgets::{
         BarChart, Cell, List, ListItem, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Table, TableState,
+        ScrollbarState, Table, TableState, Wrap,
     },
 };
 
@@ -90,6 +90,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .constraints([
             Constraint::Length(6),
             Constraint::Length(7),
+            Constraint::Length(10),
             Constraint::Min(8),
         ])
         .split(bottom[1]);
@@ -118,7 +119,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .label_style(Style::default().fg(app.theme.text_secondary));
     frame.render_widget(process_memory_widget, sidebar[1]);
 
-    frame.render_widget(process_guidance(app, snapshot), sidebar[2]);
+    frame.render_widget(process_details_panel(app, snapshot), sidebar[2]);
+    frame.render_widget(process_guidance(app, snapshot), sidebar[3]);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,55 +133,84 @@ fn process_table<'a>(
     offset: usize,
     height: usize,
 ) -> Table<'a> {
-    let rows: Vec<Row> = rows
+    let mut table_rows = Vec::new();
+    let mut current_group = String::new();
+
+    for (idx, row) in rows
         .iter()
         .enumerate()
         .skip(offset.min(rows.len()))
         .take(height)
-        .map(|(idx, row)| {
-            let process = row.process;
-            let cpu_color = widgets::status_color(&app.theme, process.cpu as f64);
-            let mem_pct = (process.memory as f64 / (1024.0 * 1024.0 * 1024.0)).min(100.0);
-            let mem_color = widgets::status_color(&app.theme, mem_pct);
-            let row_style = if idx % 2 == 0 {
-                Style::default()
-            } else {
-                Style::default().bg(app.theme.alt_row_bg)
-            };
-            let name = if row.depth == 0 {
-                collectors::truncate(&process.name, 28)
-            } else {
-                let prefix = format!("{}└ ", "  ".repeat(row.depth.min(6)));
-                collectors::truncate(&(prefix + &process.name), 28)
-            };
+    {
+        let process = row.process;
+        let process_group = app.process_group_label(process).to_string();
+
+        if app.active_tab == Tab::Processes && current_group != process_group {
+            if !current_group.is_empty() {
+                table_rows.push(
+                    Row::new(vec![
+                        Cell::from(""),
+                        Cell::from(format!("━ {}", process_group)),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                    ])
+                    .style(
+                        Style::default()
+                            .fg(app.theme.text_muted)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                );
+            }
+            current_group = process_group;
+        }
+
+        let cpu_color = widgets::status_color(&app.theme, process.cpu as f64);
+        let mem_pct = (process.memory as f64 / (1024.0 * 1024.0 * 1024.0)).min(100.0);
+        let mem_color = widgets::status_color(&app.theme, mem_pct);
+        let row_style = if idx % 2 == 0 {
+            Style::default()
+        } else {
+            Style::default().bg(app.theme.alt_row_bg)
+        };
+        let name = if row.depth == 0 {
+            collectors::truncate(&process.name, 28)
+        } else {
+            let prefix = format!("{}└ ", "  ".repeat(row.depth.min(6)));
+            collectors::truncate(&(prefix + &process.name), 28)
+        };
+        table_rows.push(
             Row::new(vec![
                 Cell::from(process.pid.clone()),
                 Cell::from(name),
                 Cell::from(format!("{:.1}", process.cpu)).style(Style::default().fg(cpu_color)),
                 Cell::from(collectors::format_bytes(process.memory))
                     .style(Style::default().fg(mem_color)),
+                Cell::from(collectors::truncate(app.process_group_label(process), 16)),
                 Cell::from(process.status.clone()),
             ])
-            .style(row_style)
-        })
-        .collect();
+            .style(row_style),
+        );
+    }
 
     let selected_style = Style::default()
         .bg(app.theme.highlight_bg)
         .add_modifier(Modifier::BOLD);
 
     Table::new(
-        rows,
+        table_rows,
         [
             Constraint::Length(8),
-            Constraint::Percentage(45),
+            Constraint::Percentage(36),
             Constraint::Length(8),
             Constraint::Length(12),
+            Constraint::Length(18),
             Constraint::Length(12),
         ],
     )
     .header(
-        Row::new(vec!["PID", "Name", "CPU%", "Memory", "Status"]).style(
+        Row::new(vec!["PID", "Name", "CPU%", "Memory", "Group", "Status"]).style(
             Style::default()
                 .fg(app.theme.active_tab)
                 .add_modifier(Modifier::BOLD),
@@ -229,12 +260,117 @@ fn process_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
         ListItem::new(""),
         ListItem::new("• `/` to filter by process name"),
         ListItem::new("• `s` cycles CPU → memory → pid → name"),
-        ListItem::new("• `p` cycles view: flat → tree → user"),
-        ListItem::new("• `x` term, `z` kill, `n` renice selected"),
+        ListItem::new("• `p` cycles view: flat → tree → user → service → container"),
+        ListItem::new("• `x` term, `z` kill, `n` renice, `a` pin core"),
         ListItem::new("• `j/k` to scroll, `gg/G` top/bottom"),
     ];
 
     List::new(items)
         .block(widgets::block(&app.theme, "Status"))
         .highlight_style(Style::default().fg(app.theme.brand))
+}
+
+fn process_details_panel(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
+    let mut lines: Vec<Line> = Vec::new();
+    let selected = app
+        .selected_process(snapshot)
+        .map(|process| process.pid.clone())
+        .unwrap_or_else(|| "none".into());
+    lines.push(widgets::kv_line(&app.theme, "PID", &selected));
+
+    if let Some(cmdline) = &app.process_cmdline {
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "Cmdline",
+            &collectors::truncate(cmdline, 46),
+        ));
+    }
+
+    if let Some(history) = app.histories.process_cpu.get(&selected) {
+        let sparkline_data: Vec<u64> = history.iter().copied().collect();
+        let max_usage = sparkline_data.iter().copied().max().unwrap_or(0).max(1) as u64;
+        let spark_str = if !sparkline_data.is_empty() {
+            let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+            sparkline_data
+                .iter()
+                .map(|&val| {
+                    let idx = ((val as f32 / (max_usage as f32 + 1.0)) * (chars.len() - 1) as f32)
+                        .round() as usize;
+                    chars[idx]
+                })
+                .collect::<String>()
+        } else {
+            "—".into()
+        };
+        lines.push(Line::from(vec![
+            Span::styled("CPU hist: ", Style::default().fg(app.theme.text_muted)),
+            Span::raw(spark_str),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Open files",
+        Style::default()
+            .fg(app.theme.brand)
+            .add_modifier(Modifier::BOLD),
+    )));
+    if let Some(error) = &app.process_detail_error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(app.theme.status_error),
+        )));
+    } else if app.process_open_files.is_empty() {
+        lines.push(Line::from("No open file entries"));
+    } else {
+        for row in &app.process_open_files {
+            lines.push(Line::from(format!("• {}", collectors::truncate(row, 40))));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Open ports",
+        Style::default()
+            .fg(app.theme.brand)
+            .add_modifier(Modifier::BOLD),
+    )));
+    if app.process_open_ports.is_empty() {
+        lines.push(Line::from("No open ports for PID"));
+    } else {
+        for row in &app.process_open_ports {
+            lines.push(Line::from(format!("• {}", collectors::truncate(row, 46))));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Environment",
+        Style::default()
+            .fg(app.theme.brand)
+            .add_modifier(Modifier::BOLD),
+    )));
+    if app.process_environ.is_empty() {
+        lines.push(Line::from("No environment variables"));
+    } else {
+        for var in app.process_environ.iter().take(2) {
+            lines.push(Line::from(format!("• {}", collectors::truncate(var, 50))));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Maps",
+        Style::default()
+            .fg(app.theme.brand)
+            .add_modifier(Modifier::BOLD),
+    )));
+    if app.process_maps.is_empty() {
+        lines.push(Line::from("No memory mappings"));
+    } else {
+        for map in app.process_maps.iter().take(2) {
+            lines.push(Line::from(format!("• {}", collectors::truncate(map, 50))));
+        }
+    }
+
+    Paragraph::new(lines)
+        .block(widgets::block(&app.theme, "PID Details"))
+        .wrap(Wrap { trim: false })
 }

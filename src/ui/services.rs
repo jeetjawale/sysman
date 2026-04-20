@@ -42,6 +42,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .constraints([
             Constraint::Length(6),
             Constraint::Length(7),
+            Constraint::Length(8),
             Constraint::Length(6),
             Constraint::Min(9),
         ])
@@ -49,8 +50,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
 
     frame.render_widget(service_stats(app, snapshot), sidebar[0]);
     frame.render_widget(service_focus(app, snapshot), sidebar[1]);
-    frame.render_widget(service_guidance(app, snapshot), sidebar[2]);
-    frame.render_widget(service_logs(app, snapshot), sidebar[3]);
+    frame.render_widget(service_failure_details(app), sidebar[2]);
+    frame.render_widget(service_guidance(app, snapshot), sidebar[3]);
+    frame.render_widget(service_logs(app, snapshot), sidebar[4]);
 
     // -- Error popup (if service data unavailable) --------------------------
     if let Some(error) = &app.service_error {
@@ -123,7 +125,12 @@ fn service_table<'a>(
         ],
     )
     .header(
-        Row::new(vec!["Name", "Active", "Sub"]).style(
+        Row::new(vec![
+            format!("Name ({})", app.service_state_filter_label()),
+            "Active".into(),
+            "Sub".into(),
+        ])
+        .style(
             Style::default()
                 .fg(app.theme.active_tab)
                 .add_modifier(Modifier::BOLD),
@@ -138,26 +145,38 @@ fn service_table<'a>(
 }
 
 fn service_stats(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
-    Paragraph::new(vec![
+    let counts = snapshot.service_state_counts.unwrap_or_default();
+    let mut lines = vec![
         widgets::kv_line(&app.theme, "Rows", &snapshot.services.len().to_string()),
-        widgets::kv_line(
-            &app.theme,
-            "Running",
-            &snapshot
-                .service_summary
-                .map(|s| s.running.to_string())
-                .unwrap_or_else(|| "n/a".into()),
+        widgets::kv_line(&app.theme, "Filter", app.service_state_filter_label()),
+        widgets::kv_line(&app.theme, "Running", &counts.running.to_string()),
+        widgets::kv_line(&app.theme, "Failed", &counts.failed.to_string()),
+    ];
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("[run {}] ", counts.running),
+            Style::default().fg(app.theme.status_good),
         ),
-        widgets::kv_line(
-            &app.theme,
-            "Failed",
-            &snapshot
-                .service_summary
-                .map(|s| s.failed.to_string())
-                .unwrap_or_else(|| "n/a".into()),
+        Span::styled(
+            format!("[fail {}] ", counts.failed),
+            Style::default().fg(app.theme.status_error),
         ),
-    ])
-    .block(widgets::block(&app.theme, "Summary"))
+        Span::styled(
+            format!("[inactive {}]", counts.inactive),
+            Style::default().fg(app.theme.text_muted),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("[activating {}] ", counts.activating),
+            Style::default().fg(app.theme.status_info),
+        ),
+        Span::styled(
+            format!("[deactivating {}]", counts.deactivating),
+            Style::default().fg(app.theme.status_warn),
+        ),
+    ]));
+    Paragraph::new(lines).block(widgets::block(&app.theme, "Summary"))
 }
 
 fn service_focus(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
@@ -191,8 +210,10 @@ fn service_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
     let items = vec![
         ListItem::new(Span::styled(headline, Style::default().fg(headline_color))),
         ListItem::new(""),
+        ListItem::new("• `s` cycle filter running/failed/all"),
         ListItem::new("• `u/i/o` start/stop/restart"),
         ListItem::new("• `e/d` enable/disable"),
+        ListItem::new("• `w/W` mask/unmask"),
     ];
 
     List::new(items)
@@ -224,6 +245,118 @@ fn service_logs(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
     Paragraph::new(lines)
         .block(widgets::block(&app.theme, "Journalctl (last 8)"))
         .wrap(Wrap { trim: false })
+}
+
+fn service_failure_details(app: &App) -> Paragraph<'static> {
+    let mut lines: Vec<Line> = Vec::new();
+
+    if let Some(error) = &app.service_failure_error {
+        lines.push(Line::from(Span::styled(
+            collectors::truncate(error, 68),
+            Style::default().fg(app.theme.status_error),
+        )));
+    } else if let Some(details) = &app.service_failure_details {
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "Result",
+            if details.result.is_empty() {
+                "unknown"
+            } else {
+                &details.result
+            },
+        ));
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "Exit",
+            &format!(
+                "{} {}",
+                if details.exec_main_code.is_empty() {
+                    "-"
+                } else {
+                    &details.exec_main_code
+                },
+                details
+                    .exec_main_status
+                    .map(|status| status.to_string())
+                    .unwrap_or_else(|| "-".into())
+            ),
+        ));
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "State",
+            &format!(
+                "{} / {}",
+                if details.active_state.is_empty() {
+                    "-"
+                } else {
+                    &details.active_state
+                },
+                if details.sub_state.is_empty() {
+                    "-"
+                } else {
+                    &details.sub_state
+                }
+            ),
+        ));
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "UnitFile",
+            if details.unit_file_state.is_empty() {
+                "-"
+            } else {
+                &details.unit_file_state
+            },
+        ));
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "MainPID",
+            &details
+                .main_pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "-".into()),
+        ));
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "Tasks",
+            &details
+                .tasks_current
+                .map(|tasks| tasks.to_string())
+                .unwrap_or_else(|| "-".into()),
+        ));
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "Memory",
+            &details
+                .memory_current
+                .map(collectors::format_bytes)
+                .unwrap_or_else(|| "-".into()),
+        ));
+        lines.push(widgets::kv_line(
+            &app.theme,
+            "Restarts",
+            &details
+                .n_restarts
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "-".into()),
+        ));
+        if !details.status_text.is_empty() {
+            lines.push(widgets::kv_line(
+                &app.theme,
+                "Status",
+                &collectors::truncate(&details.status_text, 40),
+            ));
+        }
+        if !details.last_error.is_empty() {
+            lines.push(Line::from(Span::styled(
+                collectors::truncate(&details.last_error, 68),
+                Style::default().fg(app.theme.status_error),
+            )));
+        }
+    } else {
+        lines.push(Line::from("No failure details available"));
+    }
+
+    Paragraph::new(lines).block(widgets::block(&app.theme, "Failure / Last Exit"))
 }
 
 fn service_row_style(app: &App, service: &ServiceRow) -> Style {

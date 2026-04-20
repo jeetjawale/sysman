@@ -6,10 +6,11 @@ pub mod storage;
 pub mod systemd;
 
 // Re-export core types
-pub use netstat::ConnectionRow;
+pub use host::{CpuRuntimeInfo, GpuRuntimeInfo, HardwareInfo, MemoryRuntimeInfo};
+pub use netstat::{ConnectionRow, ProcessNetRow};
 pub use procs::ProcessRow;
-pub use storage::{DiskIoCounters, DiskIoRow, DiskRow};
-pub use systemd::{ServiceRow, ServiceSummary};
+pub use storage::{DiskIoCounters, DiskIoRow, DiskRow, SmartHealthRow};
+pub use systemd::{ServiceFailureDetails, ServiceRow, ServiceStateCounts, ServiceSummary};
 
 use crate::cli::{ProcessSort, ServiceState};
 use anyhow::Result;
@@ -21,9 +22,7 @@ pub struct Snapshot {
     pub host: String,
     pub os: String,
     pub kernel: String,
-    pub distro: String,
     pub uptime: u64,
-    pub boot_time: u64,
     pub cpu_usage: f32,
     pub cpu_cores: usize,
     pub used_memory: u64,
@@ -35,10 +34,15 @@ pub struct Snapshot {
     pub process_count: usize,
     pub load_average: String,
     pub cpu_per_core: Vec<f32>,
+    pub cpu_runtime: CpuRuntimeInfo,
+    pub gpu_runtime: GpuRuntimeInfo,
+    pub memory_runtime: MemoryRuntimeInfo,
+    pub hardware: HardwareInfo,
     pub disks: Vec<DiskRow>,
     pub processes: Vec<ProcessRow>,
     pub services: Vec<ServiceRow>,
     pub service_summary: Option<ServiceSummary>,
+    pub service_state_counts: Option<ServiceStateCounts>,
 }
 
 /// Collect a full system snapshot for display.
@@ -61,15 +65,18 @@ pub fn collect_snapshot(
     } else {
         None
     };
+    let service_state_counts = if cfg!(target_os = "linux") {
+        systemd::count_service_states().ok()
+    } else {
+        None
+    };
     let load = System::load_average();
 
     Ok(Snapshot {
         host: host::host_name(),
         os: host::os_label(),
         kernel: System::kernel_version().unwrap_or_else(|| "unknown".into()),
-        distro: host::linux_distribution().unwrap_or_else(|| "unknown".into()),
         uptime: System::uptime(),
-        boot_time: System::boot_time(),
         cpu_usage: sys.global_cpu_usage(),
         cpu_cores: sys.cpus().len(),
         used_memory: sys.used_memory(),
@@ -81,10 +88,15 @@ pub fn collect_snapshot(
         process_count: sys.processes().len(),
         load_average: format!("{:.2} / {:.2} / {:.2}", load.one, load.five, load.fifteen),
         cpu_per_core: sys.cpus().iter().map(|cpu| cpu.cpu_usage()).collect(),
+        cpu_runtime: host::collect_cpu_runtime_info(),
+        gpu_runtime: host::collect_gpu_runtime_info(),
+        memory_runtime: host::collect_memory_runtime_info(),
+        hardware: host::collect_hardware_info(),
         disks,
         processes,
         services,
         service_summary,
+        service_state_counts,
     })
 }
 

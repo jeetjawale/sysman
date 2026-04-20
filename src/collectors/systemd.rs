@@ -17,6 +17,31 @@ pub struct ServiceSummary {
     pub failed: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServiceStateCounts {
+    pub running: usize,
+    pub failed: usize,
+    pub inactive: usize,
+    pub activating: usize,
+    pub deactivating: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ServiceFailureDetails {
+    pub result: String,
+    pub exec_main_status: Option<i32>,
+    pub exec_main_code: String,
+    pub status_text: String,
+    pub last_error: String,
+    pub active_state: String,
+    pub sub_state: String,
+    pub unit_file_state: String,
+    pub main_pid: Option<u32>,
+    pub tasks_current: Option<u32>,
+    pub memory_current: Option<u64>,
+    pub n_restarts: Option<u64>,
+}
+
 /// Collect systemd services filtered by `state`.
 pub fn collect_services(state: ServiceState, limit: usize) -> Result<Vec<ServiceRow>> {
     ensure_linux_systemd()?;
@@ -64,6 +89,16 @@ pub fn count_systemd_services() -> Result<(usize, usize)> {
         count_nonempty_lines(&running),
         count_nonempty_lines(&failed),
     ))
+}
+
+pub fn count_service_states() -> Result<ServiceStateCounts> {
+    Ok(ServiceStateCounts {
+        running: count_services_by_state("running")?,
+        failed: count_services_by_state("failed")?,
+        inactive: count_services_by_state("inactive")?,
+        activating: count_services_by_state("activating")?,
+        deactivating: count_services_by_state("deactivating")?,
+    })
 }
 
 /// Ensure we're on a Linux host with systemd.
@@ -131,6 +166,68 @@ pub fn collect_service_logs(service: &str, lines: usize) -> Result<Vec<String>> 
     }
 }
 
+pub fn collect_service_failure_details(service: &str) -> Result<ServiceFailureDetails> {
+    ensure_linux_systemd()?;
+
+    let output = run_systemctl(&[
+        "show",
+        service,
+        "--no-pager",
+        "--property=Result,ExecMainStatus,ExecMainCode,StatusText,ActiveState,SubState,UnitFileState,MainPID,TasksCurrent,MemoryCurrent,NRestarts",
+    ])?;
+
+    let mut details = ServiceFailureDetails::default();
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("Result=") {
+            details.result = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("ExecMainStatus=") {
+            details.exec_main_status = value.trim().parse::<i32>().ok();
+        } else if let Some(value) = line.strip_prefix("ExecMainCode=") {
+            details.exec_main_code = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("StatusText=") {
+            details.status_text = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("ActiveState=") {
+            details.active_state = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("SubState=") {
+            details.sub_state = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("UnitFileState=") {
+            details.unit_file_state = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("MainPID=") {
+            details.main_pid = value.trim().parse::<u32>().ok().filter(|pid| *pid > 0);
+        } else if let Some(value) = line.strip_prefix("TasksCurrent=") {
+            details.tasks_current = value.trim().parse::<u32>().ok();
+        } else if let Some(value) = line.strip_prefix("MemoryCurrent=") {
+            details.memory_current = value.trim().parse::<u64>().ok().filter(|v| *v > 0);
+        } else if let Some(value) = line.strip_prefix("NRestarts=") {
+            details.n_restarts = value.trim().parse::<u64>().ok();
+        }
+    }
+
+    // Best-effort reason line from latest error/critical journal entries.
+    let reason_output = ProcessCommand::new("journalctl")
+        .args([
+            "-u",
+            service,
+            "-n",
+            "30",
+            "--no-pager",
+            "--output=short",
+            "--priority=0..3",
+        ])
+        .output()
+        .with_context(|| format!("failed to invoke journalctl for service {service}"))?;
+    if reason_output.status.success() {
+        details.last_error = String::from_utf8_lossy(&reason_output.stdout)
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| line.trim().to_string())
+            .unwrap_or_default();
+    }
+
+    Ok(details)
+}
+
 fn parse_service_line(line: &str) -> Option<ServiceRow> {
     if line.trim().is_empty() {
         return None;
@@ -148,4 +245,17 @@ fn parse_service_line(line: &str) -> Option<ServiceRow> {
 
 fn count_nonempty_lines(text: &str) -> usize {
     text.lines().filter(|line| !line.trim().is_empty()).count()
+}
+
+fn count_services_by_state(state: &str) -> Result<usize> {
+    let output = run_systemctl(&[
+        "list-units",
+        "--type=service",
+        "--state",
+        state,
+        "--all",
+        "--no-legend",
+        "--no-pager",
+    ])?;
+    Ok(count_nonempty_lines(&output))
 }

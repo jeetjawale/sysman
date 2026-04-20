@@ -10,53 +10,57 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(11),
-            Constraint::Length(22),
-            Constraint::Min(4),
+            Constraint::Length(8),
+            Constraint::Min(14),
+            Constraint::Length(6),
         ])
         .split(area);
 
-    // -- Tab overview -------------------------------------------------------
     let tab_lines = vec![
-        Line::from(Span::styled(
-            "Tab Overview",
-            Style::default()
-                .fg(app.theme.brand)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(vec![
+            Span::styled(
+                "Tab Map",
+                Style::default()
+                    .fg(app.theme.brand)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  (h/l or 1..9,0,?)",
+                Style::default().fg(app.theme.text_muted),
+            ),
+        ]),
         Line::from(""),
         help_entry(
             &app.theme,
-            "1 Dashboard",
-            "System-wide overview with CPU, memory, network, disk metrics and live trends",
+            "1 Overview",
+            "health score, alerts, top offenders",
+        ),
+        help_entry(&app.theme, "2 CPU", "per-core grid, freq/governor, thermal"),
+        help_entry(&app.theme, "3 Memory", "PSI/page faults/leak suspects"),
+        help_entry(
+            &app.theme,
+            "4 Processes",
+            "sort/filter/tree/actions/details",
+        ),
+        help_entry(&app.theme, "5 Network", "ifaces/connections/tools/filter"),
+        help_entry(&app.theme, "6 Disk", "I/O, inode+alerts, async explorer"),
+        help_entry(&app.theme, "7 GPU", "telemetry + history + process table"),
+        help_entry(
+            &app.theme,
+            "8 Services",
+            "state filter, actions, logs, diagnostics",
         ),
         help_entry(
             &app.theme,
-            "2 System",
-            "Detailed host info, per-core CPU sparklines, memory and swap gauges",
+            "9 Logs",
+            "source/level/regex/autoscroll/navigate",
         ),
         help_entry(
             &app.theme,
-            "3 Processes",
-            "Sortable and filterable process table with memory chart",
+            "0 Hardware",
+            "sensors, users/history, security snapshot",
         ),
-        help_entry(
-            &app.theme,
-            "4 Network",
-            "Interface throughput, addresses, and active connections",
-        ),
-        help_entry(
-            &app.theme,
-            "5 Disks",
-            "Mounted partitions, usage hotspots, and capacity bar chart",
-        ),
-        help_entry(
-            &app.theme,
-            "6 Services",
-            "systemd service listing with state indicators",
-        ),
-        help_entry(&app.theme, "7 Logs", "journalctl/syslog/dmesg tail panels"),
-        help_entry(&app.theme, "8 Help", "This page"),
+        help_entry(&app.theme, "? Help", "this reference"),
     ];
     frame.render_widget(
         Paragraph::new(tab_lines)
@@ -65,72 +69,130 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
         sections[0],
     );
 
-    // -- Keybindings --------------------------------------------------------
-    let key_lines = vec![
-        Line::from(Span::styled(
-            "Keyboard Shortcuts",
-            Style::default()
-                .fg(app.theme.brand)
-                .add_modifier(Modifier::BOLD),
-        )),
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .split(sections[1]);
+
+    let deep_lines = vec![
+        section_title(&app.theme, "Tab Deep Sections"),
         Line::from(""),
-        key_line(&app.theme, "1-8", "Jump to tab"),
-        key_line(&app.theme, "?", "Open this help tab"),
-        key_line(&app.theme, "h/l or Left/Right", "Previous / next tab"),
-        key_line(&app.theme, "j/k or Up/Down", "Scroll up / down"),
-        key_line(&app.theme, "gg / G", "Jump to top / bottom"),
-        key_line(&app.theme, "r", "Force refresh"),
-        key_line(&app.theme, "q", "Quit"),
-        key_line(&app.theme, "/", "Process filter mode"),
-        key_line(&app.theme, "s", "Process sort: CPU → Memory → PID → Name"),
-        key_line(&app.theme, "p", "Process view: flat → tree → user"),
-        key_line(&app.theme, "x / z", "Process SIGTERM / SIGKILL"),
-        key_line(&app.theme, "n", "Process renice input"),
-        key_line(&app.theme, "u / i / o", "Service start / stop / restart"),
-        key_line(&app.theme, "e / d", "Service enable / disable"),
-        key_line(&app.theme, "f", "Disk directory scan (Disks tab)"),
         key_line(
             &app.theme,
-            "Enter / Esc",
-            "Apply / cancel filter or renice input mode",
+            "Overview",
+            "cards + network chart + offenders panel",
         ),
-        key_line(&app.theme, "Backspace", "Edit filter/renice input"),
+        key_line(
+            &app.theme,
+            "CPU",
+            "core grid + temp history + throttling state",
+        ),
+        key_line(&app.theme, "Memory", "RAM/swap trends + PSI + fault rates"),
+        key_line(
+            &app.theme,
+            "Processes",
+            "/ filter • s sort • p view • x/z kill • n renice • a pin",
+        ),
+        key_line(
+            &app.theme,
+            "Network",
+            "c conn-state • x kill flow • b block IP • t DNS/ping/trace/http",
+        ),
+        key_line(
+            &app.theme,
+            "Disk",
+            "f async scan • m depth • inode% + SMART + large files",
+        ),
+        key_line(
+            &app.theme,
+            "GPU",
+            "util/VRAM/temp/power/fan history + GPU process VRAM table",
+        ),
+        key_line(
+            &app.theme,
+            "Services",
+            "s state filter • u/i/o restart flow • e/d enable/disable • w/W mask",
+        ),
+        key_line(
+            &app.theme,
+            "Logs",
+            "/ regex • v level • o source • a autoscroll • n/N match nav",
+        ),
+        key_line(
+            &app.theme,
+            "Hardware",
+            "sensors/power/GPU + SSH/failed logins/firewall/SELinux/AppArmor",
+        ),
     ];
     frame.render_widget(
-        Paragraph::new(key_lines)
-            .block(widgets::block(&app.theme, "Keys"))
+        Paragraph::new(deep_lines)
+            .block(widgets::block(&app.theme, "Per-Tab Reference"))
             .wrap(Wrap { trim: false }),
-        sections[1],
+        body[0],
     );
 
-    // -- About --------------------------------------------------------------
-    let about_lines = vec![
+    let config_lines = vec![
+        section_title(&app.theme, "Config / Behavior"),
+        Line::from(""),
+        key_line(&app.theme, "Refresh", "1s snapshot cycle; UI tick 200ms"),
+        key_line(&app.theme, "History", "60 samples for trends/sparklines"),
+        key_line(&app.theme, "Process rows", "top 200 processes"),
+        key_line(&app.theme, "Service backend", "Linux + systemd required"),
+        key_line(
+            &app.theme,
+            "Network tools",
+            "DNS/ping/trace/http use host binaries",
+        ),
+        key_line(
+            &app.theme,
+            "Disk explorer",
+            "background worker; status shown in sidebar/footer",
+        ),
+        key_line(
+            &app.theme,
+            "Security snapshot",
+            "best-effort probes (ufw/firewalld/iptables, SELinux/AppArmor)",
+        ),
+        key_line(
+            &app.theme,
+            "Persistent config",
+            "none yet; behavior is code/default driven",
+        ),
+        Line::from(""),
+        section_title(&app.theme, "Global Keys"),
+        key_line(&app.theme, "h/l", "previous/next tab"),
+        key_line(&app.theme, "j/k", "scroll"),
+        key_line(&app.theme, "gg / G", "top / bottom"),
+        key_line(&app.theme, "r / q", "refresh / quit"),
+    ];
+    frame.render_widget(
+        Paragraph::new(config_lines)
+            .block(widgets::block(&app.theme, "Config Reference"))
+            .wrap(Wrap { trim: false }),
+        body[1],
+    );
+
+    let footer_lines = vec![
         Line::from(vec![
             Span::styled(
-                "Sysman",
+                "Tip: ",
                 Style::default()
                     .fg(app.theme.brand)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" — ", Style::default().fg(app.theme.text_muted)),
-            Span::raw("Terminal system monitor"),
+            Span::raw("each tab supports "),
+            Span::styled("j/k gg/G", Style::default().fg(app.theme.status_info)),
+            Span::raw(" navigation."),
         ]),
-        Line::from(""),
         Line::from(vec![
-            Span::styled("Refresh: ", Style::default().fg(app.theme.text_muted)),
-            Span::styled("1s", Style::default().fg(app.theme.status_good)),
-            Span::styled("  •  History: ", Style::default().fg(app.theme.text_muted)),
-            Span::styled("60 samples", Style::default().fg(app.theme.status_good)),
-            Span::styled(
-                "  •  Processes: ",
-                Style::default().fg(app.theme.text_muted),
-            ),
-            Span::styled("top 200", Style::default().fg(app.theme.status_good)),
+            Span::raw("Open "),
+            Span::styled("footer hints", Style::default().fg(app.theme.status_info)),
+            Span::raw(" in each tab for context-specific actions."),
         ]),
     ];
     frame.render_widget(
-        Paragraph::new(about_lines)
-            .block(widgets::block(&app.theme, "About"))
+        Paragraph::new(footer_lines)
+            .block(widgets::block(&app.theme, "Quick Notes"))
             .wrap(Wrap { trim: false }),
         sections[2],
     );
@@ -153,4 +215,13 @@ fn key_line<'a>(theme: &crate::theme::Theme, key: &'a str, desc: &'a str) -> Lin
         ),
         Span::raw(desc),
     ])
+}
+
+fn section_title(theme: &crate::theme::Theme, text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default()
+            .fg(theme.brand)
+            .add_modifier(Modifier::BOLD),
+    ))
 }
