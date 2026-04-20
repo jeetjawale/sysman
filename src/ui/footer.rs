@@ -6,7 +6,34 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
-    let footer = if app.renice_input {
+    let footer = if app.logs_regex_input {
+        Line::from(vec![
+            Span::styled("LOG REGEX: ", Style::default().fg(app.theme.status_warn)),
+            Span::raw(app.logs_query.clone()),
+            Span::styled(
+                "  |  Enter to apply  Esc to clear",
+                Style::default().fg(app.theme.text_muted),
+            ),
+        ])
+    } else if app.network_tool_input {
+        Line::from(vec![
+            Span::styled("NET TARGET: ", Style::default().fg(app.theme.status_warn)),
+            Span::raw(app.network_tool_value.clone()),
+            Span::styled(
+                "  |  Enter: DNS+Ping+Trace+HTTP  Esc: cancel",
+                Style::default().fg(app.theme.text_muted),
+            ),
+        ])
+    } else if app.pin_input {
+        Line::from(vec![
+            Span::styled("PIN CORE: ", Style::default().fg(app.theme.status_warn)),
+            Span::raw(app.pin_core_value.clone()),
+            Span::styled(
+                "  |  Enter to apply  Esc to cancel",
+                Style::default().fg(app.theme.text_muted),
+            ),
+        ])
+    } else if app.renice_input {
         Line::from(vec![
             Span::styled("RENICE: ", Style::default().fg(app.theme.status_warn)),
             Span::raw(app.renice_value.clone()),
@@ -32,13 +59,16 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         };
 
         let tab_hints = match app.active_tab {
-            Tab::Dashboard => "",
-            Tab::System => "",
-            Tab::Processes => " j/k gg/G / s p x z n",
-            Tab::Network => " j/k gg/G",
-            Tab::Disks => " j/k gg/G f scan",
-            Tab::Services => " j/k gg/G u/i/o e/d",
-            Tab::Logs => " j/k gg/G",
+            Tab::Overview => "",
+            Tab::Cpu => "",
+            Tab::Memory => "",
+            Tab::Processes => " j/k gg/G / s p x z n a",
+            Tab::Network => " j/k gg/G c filter x kill b block t tools",
+            Tab::Disk => " j/k gg/G f async-scan m depth",
+            Tab::Gpu => "",
+            Tab::Services => " j/k gg/G s filter u/i/o e/d w/W",
+            Tab::Logs => " j/k gg/G / regex v level o source a auto n/N match",
+            Tab::Hardware => "",
             Tab::Help => "",
         };
 
@@ -55,7 +85,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
             Span::styled("◆", Style::default().fg(app.theme.divider)),
             Span::raw(" "),
             Span::styled(
-                "1-8",
+                "1-9,0",
                 Style::default()
                     .fg(app.theme.brand)
                     .add_modifier(Modifier::BOLD),

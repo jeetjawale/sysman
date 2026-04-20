@@ -1,10 +1,13 @@
+pub mod cpu;
 pub mod dashboard;
 pub mod disks;
 pub mod footer;
+pub mod gpu;
+pub mod hardware;
 pub mod help;
 pub mod logs;
+pub mod memory;
 pub mod network;
 pub mod processes;
 pub mod services;
-pub mod system;
 pub mod widgets;

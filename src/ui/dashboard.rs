@@ -8,6 +8,9 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
+    let alerts = active_alerts(app, snapshot);
+    let health_score = system_health_score(snapshot, alerts.len());
+
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -21,11 +24,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     let metrics = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
+            Constraint::Percentage(17),
+            Constraint::Percentage(17),
+            Constraint::Percentage(16),
+            Constraint::Percentage(16),
+            Constraint::Percentage(17),
+            Constraint::Percentage(17),
         ])
         .split(sections[0]);
 
@@ -93,13 +97,44 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     frame.render_widget(
         widgets::metric_card(
             &app.theme,
-            "Services",
-            &service_summary_label(snapshot),
-            "systemd overview",
-            service_summary_color(&app.theme, snapshot),
+            "Alerts",
+            &alerts.len().to_string(),
+            if alerts.is_empty() {
+                "all clear"
+            } else {
+                "attention needed"
+            },
+            if alerts.is_empty() {
+                app.theme.status_good
+            } else {
+                app.theme.status_error
+            },
             app.animation_frame,
         ),
         metrics[4],
+    );
+    frame.render_widget(
+        widgets::metric_card(
+            &app.theme,
+            "Health",
+            &format!("{health_score}/100"),
+            if health_score >= 80 {
+                "healthy"
+            } else if health_score >= 60 {
+                "degraded"
+            } else {
+                "critical"
+            },
+            if health_score >= 80 {
+                app.theme.status_good
+            } else if health_score >= 60 {
+                app.theme.status_warn
+            } else {
+                app.theme.status_error
+            },
+            app.animation_frame,
+        ),
+        metrics[5],
     );
 
     // -- Middle: sparklines + network chart with better spacing --------
@@ -146,8 +181,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         ])
         .split(sections[2]);
 
-    frame.render_widget(overview(app, snapshot), bottom[0]);
-    frame.render_widget(process_preview(app, snapshot), bottom[1]);
+    frame.render_widget(overview(app, snapshot, &alerts, health_score), bottom[0]);
+    frame.render_widget(top_offenders(app, snapshot), bottom[1]);
     frame.render_widget(network_preview(app), bottom[2]);
 }
 
@@ -196,8 +231,13 @@ fn network_chart(app: &App) -> Chart<'_> {
     )
 }
 
-fn overview(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
-    Paragraph::new(vec![
+fn overview(
+    app: &App,
+    snapshot: &Snapshot,
+    alerts: &[String],
+    health_score: i32,
+) -> Paragraph<'static> {
+    let mut lines = vec![
         widgets::kv_line(&app.theme, "Host", &snapshot.host),
         widgets::kv_line(&app.theme, "OS", &snapshot.os),
         widgets::kv_line(&app.theme, "Kernel", &snapshot.kernel),
@@ -212,34 +252,101 @@ fn overview(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
             "Free Mem",
             &collectors::format_bytes(snapshot.available_memory),
         ),
-    ])
-    .block(widgets::block(&app.theme, "Overview"))
-}
+        widgets::kv_line(&app.theme, "Health", &format!("{health_score}/100")),
+    ];
 
-fn process_preview(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
-    let mut lines = vec![widgets::kv_line(
-        &app.theme,
-        "Sort",
-        widgets::process_sort_label(app.process_sort),
-    )];
-
-    for (_idx, process) in snapshot.processes.iter().take(5).enumerate() {
-        // TODO: Use _row_bg to highlight alternating rows for better readability
-
+    if let Some(first_alert) = alerts.first() {
         lines.push(Line::from(vec![
+            Span::styled("Alert: ", Style::default().fg(app.theme.status_error)),
             Span::styled(
-                format!("{:>5.1}% ", process.cpu),
-                Style::default()
-                    .fg(app.theme.status_info)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                collectors::truncate(&process.name, 18),
-                Style::default().fg(app.theme.text_primary),
+                collectors::truncate(first_alert, 28),
+                Style::default().fg(app.theme.status_error),
             ),
         ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("Alert: ", Style::default().fg(app.theme.status_good)),
+            Span::styled("All clear", Style::default().fg(app.theme.status_good)),
+        ]));
     }
-    Paragraph::new(lines).block(widgets::block(&app.theme, "Process Preview"))
+
+    Paragraph::new(lines).block(widgets::block(&app.theme, "Overview"))
+}
+
+fn top_offenders(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
+    let mut lines: Vec<Line> = Vec::new();
+    let top_cpu = snapshot
+        .processes
+        .iter()
+        .max_by(|a, b| a.cpu.total_cmp(&b.cpu));
+    let top_mem = snapshot
+        .processes
+        .iter()
+        .max_by_key(|process| process.memory);
+    let top_disk = app
+        .disk_io_rows
+        .iter()
+        .max_by_key(|row| row.read_bps + row.write_bps);
+    let top_net = app
+        .network_process_rows
+        .iter()
+        .max_by_key(|row| row.rx_bps + row.tx_bps);
+
+    lines.push(widgets::kv_line(
+        &app.theme,
+        "CPU",
+        &top_cpu
+            .map(|process| {
+                format!(
+                    "{} {:.1}%",
+                    collectors::truncate(&process.name, 16),
+                    process.cpu
+                )
+            })
+            .unwrap_or_else(|| "n/a".into()),
+    ));
+    lines.push(widgets::kv_line(
+        &app.theme,
+        "Memory",
+        &top_mem
+            .map(|process| {
+                format!(
+                    "{} {}",
+                    collectors::truncate(&process.name, 14),
+                    collectors::format_bytes(process.memory)
+                )
+            })
+            .unwrap_or_else(|| "n/a".into()),
+    ));
+    lines.push(widgets::kv_line(
+        &app.theme,
+        "Disk I/O",
+        &top_disk
+            .map(|row| {
+                format!(
+                    "{} r:{} w:{}",
+                    row.device,
+                    widgets::format_rate(row.read_bps),
+                    widgets::format_rate(row.write_bps)
+                )
+            })
+            .unwrap_or_else(|| "n/a".into()),
+    ));
+    lines.push(widgets::kv_line(
+        &app.theme,
+        "Network",
+        &top_net
+            .map(|row| {
+                format!(
+                    "{} {}",
+                    collectors::truncate(&row.process, 14),
+                    widgets::format_rate(row.rx_bps + row.tx_bps)
+                )
+            })
+            .unwrap_or_else(|| "n/a".into()),
+    ));
+
+    Paragraph::new(lines).block(widgets::block(&app.theme, "Top Offenders"))
 }
 
 fn network_preview(app: &App) -> Paragraph<'static> {
@@ -294,17 +401,85 @@ fn disk_summary_color(theme: &Theme, snapshot: &Snapshot) -> Color {
         .unwrap_or(theme.text_secondary)
 }
 
-fn service_summary_label(snapshot: &Snapshot) -> String {
-    snapshot
-        .service_summary
-        .map(|summary| format!("{} up / {} fail", summary.running, summary.failed))
-        .unwrap_or_else(|| "Unavailable".into())
+fn active_alerts(app: &App, snapshot: &Snapshot) -> Vec<String> {
+    let mut alerts = Vec::new();
+    let mem_pct = collectors::percentage(snapshot.used_memory, snapshot.total_memory);
+
+    if snapshot.cpu_usage >= 85.0 {
+        alerts.push(format!("High CPU {:.1}%", snapshot.cpu_usage));
+    }
+    if mem_pct >= 85.0 {
+        alerts.push(format!("High memory {:.1}%", mem_pct));
+    }
+    if let Some(disk) = snapshot
+        .disks
+        .iter()
+        .max_by(|a, b| a.usage.total_cmp(&b.usage))
+        && disk.usage >= 90.0
+    {
+        alerts.push(format!("Disk {} at {:.1}%", disk.mount, disk.usage));
+    }
+    if let Some(summary) = snapshot.service_summary
+        && summary.failed > 0
+    {
+        alerts.push(format!("{} failed services", summary.failed));
+    }
+    if log_error_spike(app) {
+        alerts.push("Log error spike detected".into());
+    }
+
+    alerts
 }
 
-fn service_summary_color(theme: &Theme, snapshot: &Snapshot) -> Color {
-    match snapshot.service_summary {
-        Some(summary) if summary.failed > 0 => theme.status_error,
-        Some(_) => theme.status_good,
-        None => theme.status_warn,
+fn system_health_score(snapshot: &Snapshot, alert_count: usize) -> i32 {
+    let mut score = 100.0;
+    let mem_pct = collectors::percentage(snapshot.used_memory, snapshot.total_memory);
+    let swap_pct = collectors::percentage(snapshot.used_swap, snapshot.total_swap);
+    let worst_disk = snapshot
+        .disks
+        .iter()
+        .map(|disk| disk.usage)
+        .fold(0.0, f64::max);
+
+    score -= (snapshot.cpu_usage as f64 * 0.25).min(25.0);
+    score -= (mem_pct * 0.25).min(25.0);
+    score -= (swap_pct * 0.15).min(15.0);
+    score -= (worst_disk * 0.2).min(20.0);
+    score -= (alert_count as f64 * 4.0).min(20.0);
+
+    score.round().clamp(0.0, 100.0) as i32
+}
+
+fn log_error_spike(app: &App) -> bool {
+    let lines: Vec<&String> = app
+        .logs_journal
+        .iter()
+        .chain(app.logs_syslog.iter())
+        .chain(app.logs_dmesg.iter())
+        .collect();
+    if lines.len() < 20 {
+        return false;
     }
+
+    let split = lines.len() / 2;
+    let first_half_errors = lines[..split]
+        .iter()
+        .filter(|line| is_error_line(line))
+        .count();
+    let second_half_errors = lines[split..]
+        .iter()
+        .filter(|line| is_error_line(line))
+        .count();
+
+    second_half_errors >= 6 && second_half_errors >= first_half_errors.saturating_mul(2).max(3)
+}
+
+fn is_error_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("error")
+        || lower.contains(" err ")
+        || lower.contains("failed")
+        || lower.contains("panic")
+        || lower.contains("fatal")
+        || lower.contains("crit")
 }
