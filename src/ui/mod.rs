@@ -1,3 +1,4 @@
+pub mod containers;
 pub mod cpu;
 pub mod dashboard;
 pub mod disks;

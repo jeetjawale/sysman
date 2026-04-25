@@ -17,6 +17,8 @@ pub struct ProcessRow {
     pub cpu: f32,
     pub memory: u64,
     pub status: String,
+    /// Non-None when the process looks suspicious, contains a short reason string.
+    pub suspicious: Option<String>,
 }
 
 pub struct ProcessDetails {
@@ -45,6 +47,8 @@ pub fn collect_processes(system: &System, limit: usize, sort: ProcessSort) -> Ve
         .map(|(pid, process)| {
             let pid_u32 = pid.as_u32();
             let (service_group, container_group) = linux_process_groups(pid_u32);
+            let name = process.name().to_string_lossy().to_string();
+            let suspicious = check_suspicious_process(pid_u32, &name);
             ProcessRow {
                 pid: pid.to_string(),
                 parent_pid: process.parent().map(|ppid| ppid.to_string()),
@@ -54,10 +58,11 @@ pub fn collect_processes(system: &System, limit: usize, sort: ProcessSort) -> Ve
                     .unwrap_or_else(|| "-".into()),
                 service_group,
                 container_group,
-                name: process.name().to_string_lossy().to_string(),
+                name,
                 cpu: process.cpu_usage(),
                 memory: process.memory(),
                 status: format!("{:?}", process.status()),
+                suspicious,
             }
         })
         .collect()
@@ -217,4 +222,49 @@ fn is_probable_container_id(token: &str) -> bool {
 
 fn short_container_id(value: &str) -> String {
     value.chars().take(12).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Suspicious process heuristics
+// ---------------------------------------------------------------------------
+
+/// Check a process for suspicious indicators via /proc only (no subprocesses).
+///
+/// Returns `Some(reason)` for the first matching heuristic, `None` if clean.
+pub fn check_suspicious_process(pid: u32, name: &str) -> Option<String> {
+    let exe_path = fs::read_link(format!("/proc/{pid}/exe"));
+
+    // 1. Exe has been deleted from disk since the process started.
+    if let Ok(ref path) = exe_path {
+        let path_str = path.to_string_lossy();
+        if path_str.ends_with(" (deleted)") {
+            return Some("exe deleted".into());
+        }
+    }
+
+    // 2. Process was launched from a world-writable / temp directory.
+    if let Ok(ref path) = exe_path {
+        let path_str = path.to_string_lossy();
+        for prefix in &["/tmp/", "/dev/shm/", "/var/tmp/", "/run/shm/"] {
+            if path_str.starts_with(prefix) {
+                return Some(format!("launched from {}", prefix.trim_end_matches('/')));
+            }
+        }
+    }
+
+    // 3. Process name mismatches the exe basename (masquerading).
+    //    Skip kernel threads (no exe) and short names (common false positives).
+    if name.len() >= 4 {
+        if let Ok(ref path) = exe_path {
+            if let Some(exe_base) = path.file_name() {
+                let exe_name = exe_base.to_string_lossy();
+                // Allow prefix match (e.g. "python" vs "python3.11")
+                if !exe_name.starts_with(name) && !name.starts_with(exe_name.as_ref()) {
+                    return Some(format!("name '{}' != exe '{}'", name, exe_name));
+                }
+            }
+        }
+    }
+
+    None
 }

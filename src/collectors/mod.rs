@@ -1,3 +1,4 @@
+pub mod containers;
 pub mod host;
 pub mod logs;
 pub mod netstat;
@@ -43,6 +44,7 @@ pub struct Snapshot {
     pub services: Vec<ServiceRow>,
     pub service_summary: Option<ServiceSummary>,
     pub service_state_counts: Option<ServiceStateCounts>,
+    pub containers: Vec<containers::ContainerRow>,
 }
 
 /// Collect a full system snapshot for display.
@@ -97,6 +99,7 @@ pub fn collect_snapshot(
         services,
         service_summary,
         service_state_counts,
+        containers: containers::collect_containers(),
     })
 }
 

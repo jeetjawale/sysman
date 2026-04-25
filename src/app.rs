@@ -87,6 +87,7 @@ pub(crate) enum Tab {
     Cpu,
     Memory,
     Processes,
+    Containers,
     Network,
     Disk,
     Gpu,
@@ -203,6 +204,7 @@ pub(crate) struct App {
     pub last_refresh: Instant,
     pub last_tick: Instant,
     pub process_scroll: usize,
+    pub container_scroll: usize,
     pub network_scroll: usize,
     pub connection_scroll: usize,
     pub disk_scroll: usize,
@@ -246,6 +248,10 @@ pub(crate) struct App {
     pub logs_journal: Vec<String>,
     pub logs_syslog: Vec<String>,
     pub logs_dmesg: Vec<String>,
+    /// Pre-computed spike message shown in the logs UI header.
+    pub error_spike: Option<String>,
+    /// Rolling per-refresh error counts (one entry per second tick, capacity 60).
+    pub error_count_history: VecDeque<u32>,
     pub process_open_files: Vec<String>,
     pub process_open_ports: Vec<String>,
     pub process_detail_error: Option<String>,
@@ -292,6 +298,7 @@ impl App {
             last_refresh: Instant::now() - REFRESH_INTERVAL,
             last_tick: Instant::now(),
             process_scroll: 0,
+            container_scroll: 0,
             network_scroll: 0,
             connection_scroll: 0,
             disk_scroll: 0,
@@ -335,6 +342,8 @@ impl App {
             logs_journal: Vec::new(),
             logs_syslog: Vec::new(),
             logs_dmesg: Vec::new(),
+            error_spike: None,
+            error_count_history: VecDeque::new(),
             process_open_files: Vec::new(),
             process_open_ports: Vec::new(),
             process_detail_error: None,
@@ -419,7 +428,7 @@ impl App {
                     self.refresh_selected_service_logs();
                     self.refresh_selected_service_failure_details();
                 }
-                if self.active_tab == Tab::Logs {
+                if self.active_tab == Tab::Logs || self.active_tab == Tab::Overview {
                     self.refresh_logs_view();
                 }
                 if self.active_tab == Tab::Processes {
@@ -661,7 +670,8 @@ impl App {
             Tab::Overview => Tab::Cpu,
             Tab::Cpu => Tab::Memory,
             Tab::Memory => Tab::Processes,
-            Tab::Processes => Tab::Network,
+            Tab::Processes => Tab::Containers,
+            Tab::Containers => Tab::Network,
             Tab::Network => Tab::Disk,
             Tab::Disk => Tab::Gpu,
             Tab::Gpu => Tab::Services,
@@ -691,7 +701,8 @@ impl App {
             Tab::Cpu => Tab::Overview,
             Tab::Memory => Tab::Cpu,
             Tab::Processes => Tab::Memory,
-            Tab::Network => Tab::Processes,
+            Tab::Containers => Tab::Processes,
+            Tab::Network => Tab::Containers,
             Tab::Disk => Tab::Network,
             Tab::Gpu => Tab::Disk,
             Tab::Services => Tab::Gpu,
@@ -723,11 +734,22 @@ impl App {
                     self.refresh_selected_process_details();
                 }
             }
+            Tab::Containers => {
+                if let Some(snapshot) = self.snapshot.as_ref() {
+                    let max_scroll = snapshot.containers.len().saturating_sub(1);
+                    self.container_scroll = (self.container_scroll + 1).min(max_scroll);
+                }
+            }
             Tab::Network => {
                 let max_scroll = self.filtered_connections().len().saturating_sub(1);
                 self.connection_scroll = (self.connection_scroll + 1).min(max_scroll);
             }
-            Tab::Disk => self.disk_scroll = self.disk_scroll.saturating_add(1),
+            Tab::Disk => {
+                if let Some(snapshot) = self.snapshot.as_ref() {
+                    let max_scroll = snapshot.disks.len().saturating_sub(1);
+                    self.disk_scroll = (self.disk_scroll + 1).min(max_scroll);
+                }
+            }
             Tab::Services => {
                 if let Some(snapshot) = self.snapshot.as_ref() {
                     let max_scroll = snapshot.services.len().saturating_sub(1);
@@ -750,6 +772,7 @@ impl App {
                 self.process_scroll = self.process_scroll.saturating_sub(1);
                 self.refresh_selected_process_details();
             }
+            Tab::Containers => self.container_scroll = self.container_scroll.saturating_sub(1),
             Tab::Network => self.connection_scroll = self.connection_scroll.saturating_sub(1),
             Tab::Disk => self.disk_scroll = self.disk_scroll.saturating_sub(1),
             Tab::Services => {
@@ -771,6 +794,7 @@ impl App {
                 self.process_scroll = 0;
                 self.refresh_selected_process_details();
             }
+            Tab::Containers => self.container_scroll = 0,
             Tab::Network => self.connection_scroll = 0,
             Tab::Disk => self.disk_scroll = 0,
             Tab::Services => {
@@ -795,10 +819,19 @@ impl App {
                     self.refresh_selected_process_details();
                 }
             }
+            Tab::Containers => {
+                if let Some(snapshot) = self.snapshot.as_ref() {
+                    self.container_scroll = snapshot.containers.len().saturating_sub(1);
+                }
+            }
             Tab::Network => {
                 self.connection_scroll = self.filtered_connections().len().saturating_sub(1);
             }
-            Tab::Disk => self.disk_scroll = self.disk_scroll.saturating_add(1),
+            Tab::Disk => {
+                if let Some(snapshot) = self.snapshot.as_ref() {
+                    self.disk_scroll = snapshot.disks.len().saturating_sub(1);
+                }
+            }
             Tab::Services => {
                 if let Some(snapshot) = self.snapshot.as_ref() {
                     self.service_scroll = snapshot.services.len().saturating_sub(1);
@@ -1304,9 +1337,54 @@ impl App {
         self.logs_journal = collectors::logs::collect_journal_lines(200);
         self.logs_syslog = collectors::logs::collect_syslog_lines(200);
         self.logs_dmesg = collectors::logs::collect_dmesg_lines(200);
+        self.update_error_spike();
         if self.logs_autoscroll {
             self.logs_scroll = usize::MAX / 4;
         }
+    }
+
+    /// Push the current error count into the rolling history and compute the spike status.
+    ///
+    /// History is a ring buffer of `HISTORY_CAPACITY` slots (one per 1-second refresh).
+    /// A spike is declared when the **recent half** of the history has ≥2× the error
+    /// rate of the **older half**, with a minimum of 3 errors in the recent window.
+    fn update_error_spike(&mut self) {
+        let count = self
+            .logs_journal
+            .iter()
+            .chain(self.logs_syslog.iter())
+            .chain(self.logs_dmesg.iter())
+            .filter(|line| is_error_line(line))
+            .count() as u32;
+
+        if self.error_count_history.len() >= HISTORY_CAPACITY {
+            self.error_count_history.pop_front();
+        }
+        self.error_count_history.push_back(count);
+
+        let len = self.error_count_history.len();
+        // Need at least 4 slots before comparing halves.
+        if len < 4 {
+            self.error_spike = None;
+            return;
+        }
+
+        let half = len / 2;
+        let recent: u32 = self.error_count_history.iter().rev().take(half).sum();
+        let older: u32 = self.error_count_history.iter().rev().skip(half).take(half).sum();
+
+        let spike_threshold = (older as f64 * 2.0).max(3.0);
+        self.error_spike = if recent as f64 >= spike_threshold {
+            Some(format!(
+                "⚠ error spike: {} errs (recent {}) vs {} errs (prev {})",
+                recent,
+                half,
+                older,
+                half,
+            ))
+        } else {
+            None
+        };
     }
 
     pub(crate) fn cycle_logs_level_filter(&mut self) {
@@ -1655,7 +1733,12 @@ impl App {
                 Tab::Overview => ui::dashboard::draw(frame, content_area, self, &snapshot),
                 Tab::Cpu => ui::cpu::draw(frame, content_area, self, &snapshot),
                 Tab::Memory => ui::memory::draw(frame, content_area, self, &snapshot),
-                Tab::Processes => ui::processes::draw(frame, content_area, self, &snapshot),
+                Tab::Processes => {
+                    ui::processes::draw(frame, content_area, self, &snapshot)
+                }
+                Tab::Containers => {
+                    ui::containers::draw(frame, content_area, self, &snapshot)
+                }
                 Tab::Network => ui::network::draw(frame, content_area, self, &snapshot),
                 Tab::Disk => ui::disks::draw(frame, content_area, self, &snapshot),
                 Tab::Gpu => ui::gpu::draw(frame, content_area, self, &snapshot),
@@ -1696,6 +1779,10 @@ impl App {
                 Span::raw(" Processes"),
             ]),
             Line::from(vec![
+                Span::styled("C", Style::default().fg(self.theme.status_info)),
+                Span::raw(" Containers"),
+            ]),
+            Line::from(vec![
                 Span::styled("5", Style::default().fg(self.theme.status_info)),
                 Span::raw(" Network"),
             ]),
@@ -1729,13 +1816,14 @@ impl App {
             Tab::Cpu => 1,
             Tab::Memory => 2,
             Tab::Processes => 3,
-            Tab::Network => 4,
-            Tab::Disk => 5,
-            Tab::Gpu => 6,
-            Tab::Services => 7,
-            Tab::Logs => 8,
-            Tab::Hardware => 9,
-            Tab::Help => 10,
+            Tab::Containers => 4,
+            Tab::Network => 5,
+            Tab::Disk => 6,
+            Tab::Gpu => 7,
+            Tab::Services => 8,
+            Tab::Logs => 9,
+            Tab::Hardware => 10,
+            Tab::Help => 11,
         };
 
         Tabs::new(titles)
@@ -1806,4 +1894,15 @@ fn logs_matches_level(line: &str, level: LogLevelFilter) -> bool {
         LogLevelFilter::Warn => is_warn,
         LogLevelFilter::Info => is_info,
     }
+}
+
+/// Returns true if a log line looks like an error. Shared by spike detection and the UI.
+pub(crate) fn is_error_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("error")
+        || lower.contains(" err ")
+        || lower.contains("failed")
+        || lower.contains("panic")
+        || lower.contains("fatal")
+        || lower.contains("crit")
 }

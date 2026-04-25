@@ -154,6 +154,17 @@ pub fn collect_gpu_runtime_info() -> GpuRuntimeInfo {
         };
     }
 
+    if command_exists("rocm-smi")
+        && let Some(devices) = collect_rocm_gpu_runtime()
+        && !devices.is_empty()
+    {
+        return GpuRuntimeInfo {
+            backend: "rocm-smi".into(),
+            devices,
+            processes: Vec::new(), // ROCm per-process VRAM requires root; skip
+        };
+    }
+
     GpuRuntimeInfo {
         backend: "unavailable".into(),
         devices: Vec::new(),
@@ -870,3 +881,308 @@ fn parse_optional_f64(value: &str) -> Option<f64> {
         cleaned.parse::<f64>().ok()
     }
 }
+
+// ---------------------------------------------------------------------------
+// ROCm GPU runtime collector
+// ---------------------------------------------------------------------------
+
+/// Try to collect live AMD GPU telemetry via `rocm-smi`.
+///
+/// Attempts JSON mode first (ROCm 5+), falls back to individual `--show*` flags.
+/// Returns `None` only when rocm-smi produces no usable output at all.
+fn collect_rocm_gpu_runtime() -> Option<Vec<GpuRuntimeDevice>> {
+    // --- Strategy 1: rocm-smi --json (ROCm ≥ 5.0) ---
+    if let Some(devices) = collect_rocm_json() {
+        return Some(devices);
+    }
+    // --- Strategy 2: rocm-smi individual flags (older ROCm / plain text) ---
+    collect_rocm_plain_text()
+}
+
+/// Parse `rocm-smi --json` output.
+///
+/// JSON structure:
+/// ```json
+/// {
+///   "card0": {
+///     "Card series": "Radeon RX 7900 XTX",
+///     "GPU use (%)": "42",
+///     "Temperature (Sensor edge) (C)": "67.0",
+///     "Average Graphics Package Power (W)": "210.0",
+///     "Fan speed (%)": "55",
+///     "VRAM Total Memory (B)": "25753026560",
+///     "VRAM Total Used Memory (B)": "4294967296"
+///   },
+///   "card1": { ... }
+/// }
+/// ```
+fn collect_rocm_json() -> Option<Vec<GpuRuntimeDevice>> {
+    let output = ProcessCommand::new("rocm-smi")
+        .args(["--showproductname", "--showuse", "--showtemp",
+               "--showmeminfo", "vram", "--showpower", "--showfan",
+               "--json"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Minimal JSON parser — avoids adding a `serde_json` dependency.
+    // We only need to extract string values from a flat two-level object.
+    rocm_parse_json(&text)
+}
+
+/// Parse the two-level `{"cardN": {"key": "value", ...}}` JSON that rocm-smi emits.
+/// Uses a hand-rolled parser so we don't need serde_json.
+fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
+    // Split on top-level `"cardN":` keys.
+    let mut devices: Vec<GpuRuntimeDevice> = Vec::new();
+    // Find all "card<N>" blocks. We look for `"card` as a marker.
+    let mut remaining = text;
+    let mut card_index: u32 = 0;
+    loop {
+        // Find next "card block
+        let card_start = match remaining.find("\"card") {
+            Some(pos) => pos,
+            None => break,
+        };
+        remaining = &remaining[card_start + 1..];
+        // Extract the card name to get the index
+        let name_end = remaining.find('"').unwrap_or(0);
+        let card_name = &remaining[..name_end]; // e.g. "card0"
+        let idx = card_name
+            .trim_start_matches("card")
+            .parse::<u32>()
+            .unwrap_or(card_index);
+        // Find the opening brace of the card object
+        let brace_start = match remaining.find('{') {
+            Some(pos) => pos,
+            None => break,
+        };
+        // Find the matching closing brace
+        let obj_text = &remaining[brace_start..];
+        let brace_end = find_matching_brace(obj_text).unwrap_or(obj_text.len());
+        let card_obj = &obj_text[1..brace_end]; // strip outer { }
+
+        let get = |key: &str| -> Option<String> {
+            // Find `"key": "value"` in card_obj
+            let needle = format!("\"{key}\"");
+            let pos = card_obj.find(&needle)?;
+            let after_key = &card_obj[pos + needle.len()..];
+            let colon = after_key.find(':')? + 1;
+            let after_colon = after_key[colon..].trim();
+            if after_colon.starts_with('"') {
+                let inner = &after_colon[1..];
+                let end = inner.find('"').unwrap_or(inner.len());
+                Some(inner[..end].to_string())
+            } else {
+                // numeric (no quotes)
+                let end = after_colon
+                    .find(|ch: char| !ch.is_ascii_digit() && ch != '.' && ch != '-')
+                    .unwrap_or(after_colon.len());
+                Some(after_colon[..end].to_string())
+            }
+        };
+
+        // Product name: try several key variants
+        let name = get("Card series")
+            .or_else(|| get("Card model"))
+            .or_else(|| get("GPU ID"))
+            .unwrap_or_else(|| format!("AMD GPU {idx}"));
+
+        let utilization_pct = get("GPU use (%)")
+            .as_deref()
+            .and_then(parse_optional_f64);
+
+        // Temperature: try edge sensor first, then junction
+        let temperature_c = get("Temperature (Sensor edge) (C)")
+            .or_else(|| get("Temperature (Sensor junction) (C)"))
+            .or_else(|| get("Temperature (Sensor mem) (C)"))
+            .as_deref()
+            .and_then(parse_optional_f64);
+
+        let power_w = get("Average Graphics Package Power (W)")
+            .or_else(|| get("Current Socket Graphics Package Power (W)"))
+            .as_deref()
+            .and_then(parse_optional_f64);
+
+        let fan_pct = get("Fan speed (%)")
+            .as_deref()
+            .and_then(parse_optional_f64);
+
+        // VRAM in bytes → convert to MiB
+        let memory_total_mib = get("VRAM Total Memory (B)")
+            .as_deref()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|b| b / (1024 * 1024));
+        let memory_used_mib = get("VRAM Total Used Memory (B)")
+            .as_deref()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|b| b / (1024 * 1024));
+
+        devices.push(GpuRuntimeDevice {
+            index: idx,
+            uuid: None,
+            name,
+            utilization_pct,
+            memory_used_mib,
+            memory_total_mib,
+            temperature_c,
+            power_w,
+            fan_pct,
+        });
+
+        remaining = &remaining[brace_start + brace_end..];
+        card_index += 1;
+    }
+    if devices.is_empty() { None } else { Some(devices) }
+}
+
+/// Find the index of the `}` that closes the opening `{` at position 0.
+fn find_matching_brace(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, ch) in text.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Fallback: run rocm-smi with individual flags and parse the plain-text output.
+///
+/// rocm-smi plain text looks like:
+/// ```
+/// ======================== ROCm System Management Interface ========================
+/// ================================= Concise Info ==================================
+/// GPU  Temp   AvgPwr  SCLK     MCLK     Fan     Perf  PwrCap  VRAM%  GPU%
+/// 0    67.0c  210.0W  1900Mhz  1249Mhz  55.0%   auto  300.0W  16%    42%
+/// ```
+fn collect_rocm_plain_text() -> Option<Vec<GpuRuntimeDevice>> {
+    // Use the concise output (always available, no flags needed in old versions)
+    let output = ProcessCommand::new("rocm-smi")
+        .args(["--showproductname", "--showuse", "--showtemp",
+               "--showpower", "--showfan"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut gpu_blocks: HashMap<u32, Vec<(String, String)>> = HashMap::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Lines like "GPU[0]\t\t: key: value" or "GPU[0] : key value"
+        if trimmed.starts_with("GPU[") {
+            if let Some(bracket_end) = trimmed.find(']') {
+                if let Ok(idx) = trimmed[4..bracket_end].parse::<u32>() {
+
+                    // Extract the key-value after the colon following the GPU[N]
+                    if let Some(rest) = trimmed[bracket_end + 1..].splitn(2, ':').nth(1) {
+                        let rest = rest.trim();
+                        // The rest may be "key: value" or just "key value"
+                        if let Some((k, v)) = rest.split_once(':') {
+                            gpu_blocks
+                                .entry(idx)
+                                .or_default()
+                                .push((k.trim().to_string(), v.trim().to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if gpu_blocks.is_empty() {
+        // Last resort: try the concise table format
+        return collect_rocm_concise(&text);
+    }
+
+    let mut devices: Vec<GpuRuntimeDevice> = gpu_blocks
+        .iter()
+        .map(|(&idx, kvs)| {
+            let get = |key: &str| -> Option<String> {
+                kvs.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                    .map(|(_, v)| v.clone())
+            };
+            let name = get("Card series")
+                .or_else(|| get("Card model"))
+                .unwrap_or_else(|| format!("AMD GPU {idx}"));
+            GpuRuntimeDevice {
+                index: idx,
+                uuid: None,
+                name,
+                utilization_pct: get("GPU use (%)").as_deref().and_then(parse_optional_f64),
+                temperature_c: get("Temperature (Sensor edge) (C)")
+                    .or_else(|| get("Temperature (Sensor junction) (C)"))
+                    .as_deref().and_then(parse_optional_f64),
+                power_w: get("Average Graphics Package Power (W)")
+                    .as_deref().and_then(parse_optional_f64),
+                fan_pct: get("Fan speed (%)")
+                    .as_deref().and_then(parse_optional_f64),
+                memory_used_mib: None,
+                memory_total_mib: None,
+            }
+        })
+        .collect();
+    devices.sort_by_key(|d| d.index);
+    if devices.is_empty() { None } else { Some(devices) }
+}
+
+/// Parse the compact table that `rocm-smi` alone (no flags) prints:
+/// ```
+/// GPU  Temp   AvgPwr  SCLK  MCLK  Fan   Perf  PwrCap  VRAM%  GPU%
+/// 0    67.0c  210W    ...   ...   55%   auto  300W    16%    42%
+/// ```
+fn collect_rocm_concise(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
+    let mut header_line: Option<Vec<&str>> = None;
+    let mut devices = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('=') {
+            continue;
+        }
+        let cols: Vec<&str> = trimmed.split_whitespace().collect();
+        if cols.first() == Some(&"GPU") {
+            header_line = Some(cols);
+            continue;
+        }
+        if let Some(ref headers) = header_line {
+            if let Some(&gpu_str) = cols.first() {
+                if let Ok(idx) = gpu_str.parse::<u32>() {
+                    let col = |name: &str| -> Option<&str> {
+                        headers.iter().position(|h| h.eq_ignore_ascii_case(name))
+                            .and_then(|i| cols.get(i))
+                            .copied()
+                    };
+                    let strip_suffix = |s: &str| -> Option<f64> {
+                        parse_optional_f64(s)
+                    };
+                    devices.push(GpuRuntimeDevice {
+                        index: idx,
+                        uuid: None,
+                        name: format!("AMD GPU {idx}"),
+                        utilization_pct: col("GPU%").and_then(strip_suffix),
+                        temperature_c: col("Temp").and_then(strip_suffix),
+                        power_w: col("AvgPwr").and_then(strip_suffix),
+                        fan_pct: col("Fan").and_then(strip_suffix),
+                        memory_used_mib: None,
+                        memory_total_mib: None,
+                    });
+                }
+            }
+        }
+    }
+    if devices.is_empty() { None } else { Some(devices) }
+}
+

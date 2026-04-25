@@ -16,14 +16,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         let rows = app.process_view_rows(snapshot);
         rows.iter()
             .take(5)
-            .map(|row| {
-                let p = row.process;
-                if p.name.len() > 10 {
-                    p.name[..10].to_string()
-                } else {
-                    p.name.clone()
-                }
-            })
+            .map(|row| collectors::truncate(&row.process.name, 10))
             .collect()
     };
     app.process_chart_labels.clear();
@@ -88,10 +81,10 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     let sidebar = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),
-            Constraint::Length(7),
-            Constraint::Length(10),
-            Constraint::Min(8),
+            Constraint::Length(6), // Stats
+            Constraint::Min(6),    // Memory Chart
+            Constraint::Min(10),   // Details
+            Constraint::Min(8),    // Guidance
         ])
         .split(bottom[1]);
 
@@ -104,20 +97,25 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .zip(view_rows.iter().take(5))
         .map(|(label, row)| (label.as_str(), row.process.memory / (1024 * 1024)))
         .collect();
-    let process_memory_widget = BarChart::default()
-        .block(widgets::block(&app.theme, "Top Memory (MB)"))
-        .data(&process_memory_data)
-        .bar_width(8)
-        .bar_gap(1)
-        .bar_style(Style::default().fg(app.theme.status_info))
-        .value_style(
-            Style::default()
-                .fg(app.theme.text_primary)
-                .add_modifier(Modifier::BOLD),
-        )
-        .direction(Direction::Horizontal)
-        .label_style(Style::default().fg(app.theme.text_secondary));
-    frame.render_widget(process_memory_widget, sidebar[1]);
+
+    // Safety: ratatui BarChart Horizontal panics if area.width < max_label_width + 1
+    // We truncated labels to 10, so we need at least 12 width.
+    if !process_memory_data.is_empty() && sidebar[1].height > 2 && sidebar[1].width > 12 {
+        let process_memory_widget = BarChart::default()
+            .block(widgets::block(&app.theme, "Top Memory (MB)"))
+            .data(&process_memory_data)
+            .bar_width(1)
+            .bar_gap(0)
+            .bar_style(Style::default().fg(app.theme.status_info))
+            .value_style(
+                Style::default()
+                    .fg(app.theme.text_primary)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .direction(Direction::Horizontal)
+            .label_style(Style::default().fg(app.theme.text_secondary));
+        frame.render_widget(process_memory_widget, sidebar[1]);
+    }
 
     frame.render_widget(process_details_panel(app, snapshot), sidebar[2]);
     frame.render_widget(process_guidance(app, snapshot), sidebar[3]);
@@ -169,21 +167,33 @@ fn process_table<'a>(
         let cpu_color = widgets::status_color(&app.theme, process.cpu as f64);
         let mem_pct = (process.memory as f64 / (1024.0 * 1024.0 * 1024.0)).min(100.0);
         let mem_color = widgets::status_color(&app.theme, mem_pct);
-        let row_style = if idx % 2 == 0 {
+        let row_style = if process.suspicious.is_some() {
+            Style::default().bg(app.theme.highlight_bg)
+        } else if idx % 2 == 0 {
             Style::default()
         } else {
             Style::default().bg(app.theme.alt_row_bg)
         };
-        let name = if row.depth == 0 {
-            collectors::truncate(&process.name, 28)
+        let base_name = if row.depth == 0 {
+            collectors::truncate(&process.name, 26)
         } else {
             let prefix = format!("{}└ ", "  ".repeat(row.depth.min(6)));
-            collectors::truncate(&(prefix + &process.name), 28)
+            collectors::truncate(&(prefix + &process.name), 26)
+        };
+        let name = if process.suspicious.is_some() {
+            format!("⚠ {base_name}")
+        } else {
+            base_name
+        };
+        let name_style = if process.suspicious.is_some() {
+            Style::default().fg(app.theme.status_error).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
         };
         table_rows.push(
             Row::new(vec![
                 Cell::from(process.pid.clone()),
-                Cell::from(name),
+                Cell::from(name).style(name_style),
                 Cell::from(format!("{:.1}", process.cpu)).style(Style::default().fg(cpu_color)),
                 Cell::from(collectors::format_bytes(process.memory))
                     .style(Style::default().fg(mem_color)),
@@ -225,7 +235,17 @@ fn process_table<'a>(
 }
 
 fn process_stats(app: &App, snapshot: &Snapshot, filtered_count: usize) -> Paragraph<'static> {
-    Paragraph::new(vec![
+    let suspicious_count = snapshot
+        .processes
+        .iter()
+        .filter(|p| p.suspicious.is_some())
+        .count();
+    let suspicious_style = if suspicious_count > 0 {
+        Style::default().fg(app.theme.status_error).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(app.theme.status_good)
+    };
+    let mut lines = vec![
         widgets::kv_line(&app.theme, "Loaded", &snapshot.processes.len().to_string()),
         widgets::kv_line(&app.theme, "Visible", &filtered_count.to_string()),
         widgets::kv_line(&app.theme, "Count", &snapshot.process_count.to_string()),
@@ -235,8 +255,13 @@ fn process_stats(app: &App, snapshot: &Snapshot, filtered_count: usize) -> Parag
             widgets::process_sort_label(app.process_sort),
         ),
         widgets::kv_line(&app.theme, "View", app.process_view_label()),
-    ])
-    .block(widgets::block(&app.theme, "Summary"))
+    ];
+    lines.push(Line::from(vec![
+        Span::styled("Suspicious: ", Style::default().fg(app.theme.text_muted)),
+        Span::styled(suspicious_count.to_string(), suspicious_style),
+    ]));
+    Paragraph::new(lines)
+        .block(widgets::block(&app.theme, "Summary"))
 }
 
 fn process_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
@@ -278,6 +303,17 @@ fn process_details_panel(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
         .unwrap_or_else(|| "none".into());
     lines.push(widgets::kv_line(&app.theme, "PID", &selected));
 
+    // Show suspicious flag prominently if set.
+    if let Some(reason) = app
+        .selected_process(snapshot)
+        .and_then(|p| p.suspicious.as_ref())
+    {
+        lines.push(Line::from(vec![
+            Span::styled("⚠ Suspicious: ", Style::default().fg(app.theme.status_error).add_modifier(Modifier::BOLD)),
+            Span::styled(reason.clone(), Style::default().fg(app.theme.status_error)),
+        ]));
+    }
+
     if let Some(cmdline) = &app.process_cmdline {
         lines.push(widgets::kv_line(
             &app.theme,
@@ -294,9 +330,12 @@ fn process_details_panel(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
             sparkline_data
                 .iter()
                 .map(|&val| {
-                    let idx = ((val as f32 / (max_usage as f32 + 1.0)) * (chars.len() - 1) as f32)
+                    let chars_count = chars.len();
+                    if chars_count == 0 { return ' '; }
+                    let denom = (max_usage as f32 + 1.0).max(1.0);
+                    let idx = ((val as f32 / denom) * (chars_count - 1) as f32)
                         .round() as usize;
-                    chars[idx]
+                    chars[idx.min(chars_count - 1)]
                 })
                 .collect::<String>()
         } else {

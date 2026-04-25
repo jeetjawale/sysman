@@ -152,6 +152,10 @@ impl App {
                 self.refresh_selected_service_failure_details();
                 false
             }
+            KeyCode::Char('C') => {
+                self.active_tab = Tab::Containers;
+                false
+            }
             KeyCode::Char('9') => {
                 self.active_tab = Tab::Logs;
                 self.refresh_logs_view();

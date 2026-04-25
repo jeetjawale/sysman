@@ -9,21 +9,25 @@ use ratatui::{
     },
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) {
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     // Rebuild disk label cache early to avoid Box::leak
-    let labels: Vec<String> = {
-        let snapshot = app.snapshot.as_ref().unwrap();
-        snapshot
-            .disks
-            .iter()
-            .take(5)
-            .map(|d| d.mount.rsplit('/').next().unwrap_or(&d.mount).to_string())
-            .collect()
-    };
+    let labels: Vec<String> = snapshot
+        .disks
+        .iter()
+        .take(5)
+        .map(|d| {
+            let name = d.mount.rsplit('/').next().unwrap_or(&d.mount);
+            collectors::truncate(name, 12)
+        })
+        .collect();
     app.disk_chart_labels.clear();
     app.disk_chart_labels.extend(labels);
 
-    let snapshot = app.snapshot.as_ref().unwrap();
+    // Safety: clamp scroll index
+    let disk_count = snapshot.disks.len();
+    if app.disk_scroll >= disk_count && disk_count > 0 {
+        app.disk_scroll = disk_count.saturating_sub(1);
+    }
 
     let sections = Layout::default()
         .direction(Direction::Horizontal)
@@ -46,23 +50,24 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .thumb_style(Style::default().fg(app.theme.brand))
         .track_style(Style::default().fg(app.theme.border));
-    let mut scrollbar_state = ScrollbarState::new(snapshot.disks.len())
+    let mut scrollbar_state = ScrollbarState::new(disk_count)
         .position(app.disk_scroll)
         .viewport_content_length(widgets::visible_rows(sections[0], 4));
     frame.render_stateful_widget(scrollbar, sections[0], &mut scrollbar_state);
 
     // -- Sidebar ------------------------------------------------------------
+    // Use more flexible constraints to prevent 0-height segments on small terminals
     let sidebar = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),
-            Constraint::Length(7),
-            Constraint::Length(7),
-            Constraint::Length(7),
-            Constraint::Length(7),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Min(7),
+            Constraint::Length(6), // Stats
+            Constraint::Min(5),    // Hotspots
+            Constraint::Min(5),    // I/O
+            Constraint::Min(5),    // SMART
+            Constraint::Min(5),    // Inodes
+            Constraint::Min(5),    // BarChart
+            Constraint::Min(5),    // Large Files
+            Constraint::Min(5),    // Guidance
         ])
         .split(sections[1]);
 
@@ -77,23 +82,28 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
         .disk_chart_labels
         .iter()
         .zip(snapshot.disks.iter().take(5))
-        .map(|(label, d): (&String, &DiskRow)| (label.as_str(), d.usage as u64))
+        .map(|(label, d): (&String, &DiskRow)| (label.as_str(), (d.usage.round() as u64).min(100)))
         .collect();
-    let disk_widget = BarChart::default()
-        .block(widgets::block(&app.theme, "Usage by Mount"))
-        .data(&disk_data)
-        .max(100)
-        .bar_width(7)
-        .bar_gap(1)
-        .bar_style(Style::default().fg(app.theme.status_warn))
-        .value_style(
-            Style::default()
-                .fg(app.theme.text_primary)
-                .add_modifier(Modifier::BOLD),
-        )
-        .direction(Direction::Horizontal)
-        .label_style(Style::default().fg(app.theme.text_secondary));
-    frame.render_widget(disk_widget, sidebar[5]);
+
+    // Safety: ratatui BarChart Horizontal panics if area.width < max_label_width + 1
+    // We truncated labels to 12, so we need at least 14 width.
+    if !disk_data.is_empty() && sidebar[5].height > 2 && sidebar[5].width > 14 {
+        let disk_widget = BarChart::default()
+            .block(widgets::block(&app.theme, "Usage by Mount"))
+            .data(&disk_data)
+            .max(100)
+            .bar_width(1)
+            .bar_gap(0)
+            .bar_style(Style::default().fg(app.theme.status_warn))
+            .value_style(
+                Style::default()
+                    .fg(app.theme.text_primary)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .direction(Direction::Horizontal)
+            .label_style(Style::default().fg(app.theme.text_secondary));
+        frame.render_widget(disk_widget, sidebar[5]);
+    }
     frame.render_widget(disk_large_files(app), sidebar[6]);
     frame.render_widget(disk_guidance(app), sidebar[7]);
 }

@@ -427,9 +427,18 @@ fn active_alerts(app: &App, snapshot: &Snapshot) -> Vec<String> {
     if log_error_spike(app) {
         alerts.push("Log error spike detected".into());
     }
+    let suspicious_count = snapshot
+        .processes
+        .iter()
+        .filter(|p| p.suspicious.is_some())
+        .count();
+    if suspicious_count > 0 {
+        alerts.push(format!("{suspicious_count} suspicious process(es)"));
+    }
 
     alerts
 }
+
 
 fn system_health_score(snapshot: &Snapshot, alert_count: usize) -> i32 {
     let mut score = 100.0;
@@ -440,17 +449,25 @@ fn system_health_score(snapshot: &Snapshot, alert_count: usize) -> i32 {
         .iter()
         .map(|disk| disk.usage)
         .fold(0.0, f64::max);
+    let suspicious_count = snapshot
+        .processes
+        .iter()
+        .filter(|p| p.suspicious.is_some())
+        .count();
 
     score -= (snapshot.cpu_usage as f64 * 0.25).min(25.0);
     score -= (mem_pct * 0.25).min(25.0);
     score -= (swap_pct * 0.15).min(15.0);
     score -= (worst_disk * 0.2).min(20.0);
     score -= (alert_count as f64 * 4.0).min(20.0);
+    score -= (suspicious_count as f64 * 5.0).min(10.0);
 
     score.round().clamp(0.0, 100.0) as i32
 }
 
+
 fn log_error_spike(app: &App) -> bool {
+    use crate::app::is_error_line;
     let lines: Vec<&String> = app
         .logs_journal
         .iter()
@@ -474,12 +491,3 @@ fn log_error_spike(app: &App) -> bool {
     second_half_errors >= 6 && second_half_errors >= first_half_errors.saturating_mul(2).max(3)
 }
 
-fn is_error_line(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    lower.contains("error")
-        || lower.contains(" err ")
-        || lower.contains("failed")
-        || lower.contains("panic")
-        || lower.contains("fatal")
-        || lower.contains("crit")
-}

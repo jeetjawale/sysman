@@ -115,14 +115,10 @@ fn logs_summary(
     dmesg: &[String],
 ) -> Paragraph<'static> {
     let total = journal.len() + syslog.len() + dmesg.len();
-    let all: Vec<String> = journal
-        .iter()
-        .chain(syslog.iter())
-        .chain(dmesg.iter())
-        .cloned()
-        .collect();
-    let spike = detect_error_spike(&all).unwrap_or_else(|| "stable".into());
-    let spike_is_stable = spike == "stable";
+    let (spike_text, is_spike) = match &app.error_spike {
+        Some(msg) => (msg.clone(), true),
+        None => ("stable".into(), false),
+    };
 
     Paragraph::new(vec![
         Line::from(vec![
@@ -161,11 +157,11 @@ fn logs_summary(
         Line::from(vec![
             Span::styled("Spike: ", Style::default().fg(app.theme.text_muted)),
             Span::styled(
-                spike,
-                Style::default().fg(if spike_is_stable {
-                    app.theme.status_good
-                } else {
+                spike_text,
+                Style::default().fg(if is_spike {
                     app.theme.status_error
+                } else {
+                    app.theme.status_good
                 }),
             ),
             Span::raw("  "),
@@ -196,7 +192,7 @@ fn log_panel<'a>(
         let offset = if lines.len() <= height {
             0
         } else {
-            scroll.min(lines.len() - height)
+            scroll.min(lines.len().saturating_sub(height))
         };
         for line in lines.iter().skip(offset).take(height.max(1)) {
             rows.push(highlight_line(app, &collectors::truncate(line, 180), regex));
@@ -220,67 +216,18 @@ fn filtered_logs(lines: &[String], level: LogLevelFilter, regex: Option<&Regex>)
 }
 
 fn matches_level(line: &str, level: LogLevelFilter) -> bool {
+    use crate::app::is_error_line;
     let lower = line.to_ascii_lowercase();
-    let is_error = lower.contains("error")
-        || lower.contains(" err ")
-        || lower.contains("failed")
-        || lower.contains("panic")
-        || lower.contains("fatal")
-        || lower.contains("crit");
     let is_warn = lower.contains("warn");
     let is_info = lower.contains("info");
-
     match level {
         LogLevelFilter::All => true,
-        LogLevelFilter::Error => is_error,
+        LogLevelFilter::Error => is_error_line(line),
         LogLevelFilter::Warn => is_warn,
         LogLevelFilter::Info => is_info,
     }
 }
 
-fn detect_error_spike(lines: &[String]) -> Option<String> {
-    if lines.len() < 24 {
-        return None;
-    }
-    let window = (lines.len() / 6).clamp(12, 40);
-    if lines.len() < window * 2 {
-        return None;
-    }
-
-    let errors: Vec<bool> = lines
-        .iter()
-        .map(|line| {
-            let lower = line.to_ascii_lowercase();
-            lower.contains("error")
-                || lower.contains(" err ")
-                || lower.contains("failed")
-                || lower.contains("panic")
-                || lower.contains("fatal")
-                || lower.contains("crit")
-        })
-        .collect();
-    let recent_errors = errors[errors.len() - window..]
-        .iter()
-        .filter(|is_error| **is_error)
-        .count();
-    let prev_errors = errors[errors.len() - (window * 2)..errors.len() - window]
-        .iter()
-        .filter(|is_error| **is_error)
-        .count();
-    let recent_rate = recent_errors as f64 / window as f64;
-    let prev_rate = prev_errors as f64 / window as f64;
-
-    if recent_errors >= 6 && recent_rate >= (prev_rate * 1.8).max(0.15) {
-        Some(format!(
-            "spike {}→{} errs/window (w={window})",
-            prev_errors, recent_errors
-        ))
-    } else if recent_errors >= window / 2 {
-        Some(format!("high error pressure ({recent_errors}/{window})"))
-    } else {
-        None
-    }
-}
 
 fn highlight_line(app: &App, line: &str, regex: Option<&Regex>) -> Line<'static> {
     let Some(regex) = regex else {
