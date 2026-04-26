@@ -3,6 +3,7 @@ pub mod host;
 pub mod logs;
 pub mod netstat;
 pub mod procs;
+pub mod provider;
 pub mod storage;
 pub mod systemd;
 
