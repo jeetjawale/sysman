@@ -49,3 +49,39 @@ pub fn collect_dmesg_lines(provider: &dyn CommandProvider, limit: usize) -> Vec<
     .rev()
     .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::collectors::provider::{CommandOutput, MockProvider};
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_collect_journal_lines_mock() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            "journalctl -n 10 --no-pager --output=short".to_string(),
+            CommandOutput {
+                stdout: "line 1\nline 2\nline 3".to_string(),
+                stderr: "".to_string(),
+                success: true,
+            },
+        );
+
+        let mock_provider = MockProvider { responses };
+        let lines = collect_journal_lines(&mock_provider, 10);
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(lines.len(), 3);
+            assert_eq!(lines[0], "line 1");
+            assert_eq!(lines[1], "line 2");
+            assert_eq!(lines[2], "line 3");
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert!(lines.is_empty());
+        }
+    }
+}
