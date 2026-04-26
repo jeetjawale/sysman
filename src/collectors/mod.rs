@@ -132,8 +132,10 @@ pub fn format_duration(seconds: u64) -> String {
         format!("{days}d {hours}h {minutes}m")
     } else if hours > 0 {
         format!("{hours}h {minutes}m")
-    } else {
+    } else if minutes > 0 {
         format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
     }
 }
 
@@ -172,7 +174,8 @@ mod tests {
 
     #[test]
     fn formats_duration() {
-        assert_eq!(format_duration(59), "0m");
+        assert_eq!(format_duration(59), "59s");
+        assert_eq!(format_duration(60), "1m");
         assert_eq!(format_duration(3_661), "1h 1m");
         assert_eq!(format_duration(90_061), "1d 1h 1m");
     }
