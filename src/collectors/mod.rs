@@ -8,6 +8,7 @@ pub mod storage;
 pub mod systemd;
 
 // Re-export core types
+pub use provider::{CommandOutput, CommandProvider, RealProvider};
 pub use host::{CpuRuntimeInfo, GpuRuntimeInfo, HardwareInfo, MemoryRuntimeInfo};
 pub use netstat::{ConnectionRow, ProcessNetRow};
 pub use procs::ProcessRow;

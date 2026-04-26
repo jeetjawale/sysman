@@ -1,7 +1,10 @@
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::anyhow;
 use std::process::Command as ProcessCommand;
 
 pub trait CommandProvider: Send + Sync {
-    fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput, String>;
+    fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -14,11 +17,10 @@ pub struct CommandOutput {
 pub struct RealProvider;
 
 impl CommandProvider for RealProvider {
-    fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput, String> {
+    fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput> {
         let output = ProcessCommand::new(command)
             .args(args)
-            .output()
-            .map_err(|e| e.to_string())?;
+            .output()?;
 
         Ok(CommandOutput {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -35,8 +37,11 @@ pub struct MockProvider {
 
 #[cfg(test)]
 impl CommandProvider for MockProvider {
-    fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput, String> {
+    fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput> {
         let key = format!("{} {}", command, args.join(" "));
-        Ok(self.responses.get(&key).cloned().unwrap_or_default())
+        self.responses
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| anyhow!("Mock response not found for: {} {}", command, args.join(" ")))
     }
 }
