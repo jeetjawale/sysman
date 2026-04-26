@@ -52,6 +52,7 @@ pub struct Snapshot {
 /// Collect a full system snapshot for display.
 pub fn collect_snapshot(
     sys: &mut System,
+    provider: &dyn CommandProvider,
     service_state: ServiceState,
     process_limit: usize,
 ) -> Result<Snapshot> {
