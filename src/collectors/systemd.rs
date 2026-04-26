@@ -1,6 +1,6 @@
 use crate::cli::ServiceState;
-use anyhow::{Context, Result, anyhow, bail};
-use std::process::Command as ProcessCommand;
+use crate::collectors::CommandProvider;
+use anyhow::{Result, anyhow, bail};
 
 /// A single systemd service row for display.
 #[derive(Debug, Clone)]
@@ -43,16 +43,23 @@ pub struct ServiceFailureDetails {
 }
 
 /// Collect systemd services filtered by `state`.
-pub fn collect_services(state: ServiceState, limit: usize) -> Result<Vec<ServiceRow>> {
+pub fn collect_services(
+    provider: &dyn CommandProvider,
+    state: ServiceState,
+    limit: usize,
+) -> Result<Vec<ServiceRow>> {
     ensure_linux_systemd()?;
 
-    let lines = run_systemctl(&[
-        "list-units",
-        "--type=service",
-        "--all",
-        "--no-legend",
-        "--no-pager",
-    ])?;
+    let lines = run_systemctl(
+        provider,
+        &[
+            "list-units",
+            "--type=service",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ],
+    )?;
 
     let services = lines
         .lines()
@@ -69,21 +76,27 @@ pub fn collect_services(state: ServiceState, limit: usize) -> Result<Vec<Service
 }
 
 /// Count running and failed systemd services.
-pub fn count_systemd_services() -> Result<(usize, usize)> {
-    let running = run_systemctl(&[
-        "list-units",
-        "--type=service",
-        "--state=running",
-        "--no-legend",
-        "--no-pager",
-    ])?;
-    let failed = run_systemctl(&[
-        "list-units",
-        "--type=service",
-        "--state=failed",
-        "--no-legend",
-        "--no-pager",
-    ])?;
+pub fn count_systemd_services(provider: &dyn CommandProvider) -> Result<(usize, usize)> {
+    let running = run_systemctl(
+        provider,
+        &[
+            "list-units",
+            "--type=service",
+            "--state=running",
+            "--no-legend",
+            "--no-pager",
+        ],
+    )?;
+    let failed = run_systemctl(
+        provider,
+        &[
+            "list-units",
+            "--type=service",
+            "--state=failed",
+            "--no-legend",
+            "--no-pager",
+        ],
+    )?;
 
     Ok((
         count_nonempty_lines(&running),
@@ -91,13 +104,13 @@ pub fn count_systemd_services() -> Result<(usize, usize)> {
     ))
 }
 
-pub fn count_service_states() -> Result<ServiceStateCounts> {
+pub fn count_service_states(provider: &dyn CommandProvider) -> Result<ServiceStateCounts> {
     Ok(ServiceStateCounts {
-        running: count_services_by_state("running")?,
-        failed: count_services_by_state("failed")?,
-        inactive: count_services_by_state("inactive")?,
-        activating: count_services_by_state("activating")?,
-        deactivating: count_services_by_state("deactivating")?,
+        running: count_services_by_state(provider, "running")?,
+        failed: count_services_by_state(provider, "failed")?,
+        inactive: count_services_by_state(provider, "inactive")?,
+        activating: count_services_by_state(provider, "activating")?,
+        deactivating: count_services_by_state(provider, "deactivating")?,
     })
 }
 
@@ -110,16 +123,15 @@ pub fn ensure_linux_systemd() -> Result<()> {
 }
 
 /// Run a systemctl command and return stdout as a string.
-pub fn run_systemctl(args: &[&str]) -> Result<String> {
-    let output = ProcessCommand::new("systemctl")
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to invoke systemctl with args: {}", args.join(" ")))?;
+pub fn run_systemctl(provider: &dyn CommandProvider, args: &[&str]) -> Result<String> {
+    let output = provider
+        .run("systemctl", args)
+        .map_err(|e| anyhow!("failed to invoke systemctl with args: {}: {}", args.join(" "), e))?;
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    if output.success {
+        Ok(output.stdout.trim().to_string())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         Err(anyhow!(
             "systemctl {} failed: {}",
             args.join(" "),
@@ -133,27 +145,34 @@ pub fn run_systemctl(args: &[&str]) -> Result<String> {
 }
 
 /// Collect recent journal lines for a service.
-pub fn collect_service_logs(service: &str, lines: usize) -> Result<Vec<String>> {
+pub fn collect_service_logs(
+    provider: &dyn CommandProvider,
+    service: &str,
+    lines: usize,
+) -> Result<Vec<String>> {
     ensure_linux_systemd()?;
-    let output = ProcessCommand::new("journalctl")
-        .args([
-            "-u",
-            service,
-            "-n",
-            &lines.to_string(),
-            "--no-pager",
-            "--output=short",
-        ])
-        .output()
-        .with_context(|| format!("failed to invoke journalctl for service {service}"))?;
+    let output = provider
+        .run(
+            "journalctl",
+            &[
+                "-u",
+                service,
+                "-n",
+                &lines.to_string(),
+                "--no-pager",
+                "--output=short",
+            ],
+        )
+        .map_err(|e| anyhow!("failed to invoke journalctl for service {service}: {e}"))?;
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout)
+    if output.success {
+        Ok(output
+            .stdout
             .lines()
             .map(|line| line.to_string())
             .collect())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         Err(anyhow!(
             "journalctl -u {} failed: {}",
             service,
@@ -166,15 +185,21 @@ pub fn collect_service_logs(service: &str, lines: usize) -> Result<Vec<String>> 
     }
 }
 
-pub fn collect_service_failure_details(service: &str) -> Result<ServiceFailureDetails> {
+pub fn collect_service_failure_details(
+    provider: &dyn CommandProvider,
+    service: &str,
+) -> Result<ServiceFailureDetails> {
     ensure_linux_systemd()?;
 
-    let output = run_systemctl(&[
-        "show",
-        service,
-        "--no-pager",
-        "--property=Result,ExecMainStatus,ExecMainCode,StatusText,ActiveState,SubState,UnitFileState,MainPID,TasksCurrent,MemoryCurrent,NRestarts",
-    ])?;
+    let output = run_systemctl(
+        provider,
+        &[
+            "show",
+            service,
+            "--no-pager",
+            "--property=Result,ExecMainStatus,ExecMainCode,StatusText,ActiveState,SubState,UnitFileState,MainPID,TasksCurrent,MemoryCurrent,NRestarts",
+        ],
+    )?;
 
     let mut details = ServiceFailureDetails::default();
     for line in output.lines() {
@@ -204,20 +229,24 @@ pub fn collect_service_failure_details(service: &str) -> Result<ServiceFailureDe
     }
 
     // Best-effort reason line from latest error/critical journal entries.
-    let reason_output = ProcessCommand::new("journalctl")
-        .args([
-            "-u",
-            service,
-            "-n",
-            "30",
-            "--no-pager",
-            "--output=short",
-            "--priority=0..3",
-        ])
-        .output()
-        .with_context(|| format!("failed to invoke journalctl for service {service}"))?;
-    if reason_output.status.success() {
-        details.last_error = String::from_utf8_lossy(&reason_output.stdout)
+    let reason_output = provider
+        .run(
+            "journalctl",
+            &[
+                "-u",
+                service,
+                "-n",
+                "30",
+                "--no-pager",
+                "--output=short",
+                "--priority=0..3",
+            ],
+        )
+        .map_err(|e| anyhow!("failed to invoke journalctl for service {service}: {e}"))?;
+
+    if reason_output.success {
+        details.last_error = reason_output
+            .stdout
             .lines()
             .rev()
             .find(|line| !line.trim().is_empty())
@@ -247,15 +276,19 @@ fn count_nonempty_lines(text: &str) -> usize {
     text.lines().filter(|line| !line.trim().is_empty()).count()
 }
 
-fn count_services_by_state(state: &str) -> Result<usize> {
-    let output = run_systemctl(&[
-        "list-units",
-        "--type=service",
-        "--state",
-        state,
-        "--all",
-        "--no-legend",
-        "--no-pager",
-    ])?;
+fn count_services_by_state(provider: &dyn CommandProvider, state: &str) -> Result<usize> {
+    let output = run_systemctl(
+        provider,
+        &[
+            "list-units",
+            "--type=service",
+            "--state",
+            state,
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ],
+    )?;
     Ok(count_nonempty_lines(&output))
 }
+

@@ -1,5 +1,5 @@
+use crate::collectors::CommandProvider;
 use anyhow::Result;
-use std::process::Command;
 
 #[derive(Clone, Debug, Default)]
 pub struct ContainerRow {
@@ -14,36 +14,36 @@ pub struct ContainerRow {
     pub pids: u32,
 }
 
-pub fn collect_containers() -> Vec<ContainerRow> {
+pub fn collect_containers(provider: &dyn CommandProvider) -> Vec<ContainerRow> {
     // Try Docker first, then Podman
-    if let Ok(rows) = collect_docker() {
+    if let Ok(rows) = collect_docker(provider) {
         return rows;
     }
-    collect_podman().unwrap_or_default()
+    collect_podman(provider).unwrap_or_default()
 }
 
-fn collect_docker() -> Result<Vec<ContainerRow>> {
-    let output = Command::new("docker")
-        .args([
+fn collect_docker(provider: &dyn CommandProvider) -> Result<Vec<ContainerRow>> {
+    let output = provider.run(
+        "docker",
+        &[
             "stats",
             "--no-stream",
             "--format",
             "{{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}",
-        ])
-        .output()?;
+        ],
+    ).map_err(|e| anyhow::anyhow!("Docker stats command failed: {}", e))?;
 
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("Docker stats failed"));
+    if !output.success {
+        return Err(anyhow::anyhow!("Docker stats failed: {}", output.stderr));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = output.stdout;
     let mut rows = Vec::new();
 
     // Also get images from 'docker ps' because 'stats' doesn't show them clearly
-    let ps_output = Command::new("docker")
-        .args(["ps", "--format", "{{.ID}}|{{.Image}}|{{.Status}}"])
-        .output()?;
-    let ps_stdout = String::from_utf8_lossy(&ps_output.stdout);
+    let ps_output = provider.run("docker", &["ps", "--format", "{{.ID}}|{{.Image}}|{{.Status}}"])
+        .map_err(|e| anyhow::anyhow!("Docker ps command failed: {}", e))?;
+    let ps_stdout = ps_output.stdout;
     let mut ps_info = std::collections::HashMap::new();
     for line in ps_stdout.lines() {
         let cols: Vec<&str> = line.split('|').collect();
@@ -80,27 +80,27 @@ fn collect_docker() -> Result<Vec<ContainerRow>> {
     Ok(rows)
 }
 
-fn collect_podman() -> Result<Vec<ContainerRow>> {
-    let output = Command::new("podman")
-        .args([
+fn collect_podman(provider: &dyn CommandProvider) -> Result<Vec<ContainerRow>> {
+    let output = provider.run(
+        "podman",
+        &[
             "stats",
             "--no-stream",
             "--format",
             "{{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}",
-        ])
-        .output()?;
+        ],
+    ).map_err(|e| anyhow::anyhow!("Podman stats command failed: {}", e))?;
 
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("Podman stats failed"));
+    if !output.success {
+        return Err(anyhow::anyhow!("Podman stats failed: {}", output.stderr));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = output.stdout;
     let mut rows = Vec::new();
 
-    let ps_output = Command::new("podman")
-        .args(["ps", "--format", "{{.ID}}|{{.Image}}|{{.Status}}"])
-        .output()?;
-    let ps_stdout = String::from_utf8_lossy(&ps_output.stdout);
+    let ps_output = provider.run("podman", &["ps", "--format", "{{.ID}}|{{.Image}}|{{.Status}}"])
+        .map_err(|e| anyhow::anyhow!("Podman ps command failed: {}", e))?;
+    let ps_stdout = ps_output.stdout;
     let mut ps_info = std::collections::HashMap::new();
     for line in ps_stdout.lines() {
         let cols: Vec<&str> = line.split('|').collect();
@@ -137,52 +137,49 @@ fn collect_podman() -> Result<Vec<ContainerRow>> {
     Ok(rows)
 }
 
-pub fn act_on_container(id: &str, action: &str) -> Result<()> {
+pub fn act_on_container(provider: &dyn CommandProvider, id: &str, action: &str) -> Result<()> {
     // Try Docker then Podman
-    let mut cmd = Command::new("docker");
-    cmd.args([action, id]);
-    if let Ok(output) = cmd.output()
-        && output.status.success()
-    {
-        return Ok(());
+    if let Ok(output) = provider.run("docker", &[action, id]) {
+        if output.success {
+            return Ok(());
+        }
     }
 
-    let mut cmd = Command::new("podman");
-    cmd.args([action, id]);
-    let output = cmd.output()?;
-    if output.status.success() {
+    let output = provider.run("podman", &[action, id])
+        .map_err(|e| anyhow::anyhow!("Podman command failed: {}", e))?;
+
+    if output.success {
         Ok(())
     } else {
         Err(anyhow::anyhow!(
             "Failed to {} container {}: {}",
             action,
             id,
-            String::from_utf8_lossy(&output.stderr)
+            output.stderr.trim()
         ))
     }
 }
 
-pub fn get_container_logs(id: &str, limit: usize) -> Result<Vec<String>> {
-    let mut cmd = Command::new("docker");
-    cmd.args(["logs", "--tail", &limit.to_string(), id]);
-    if let Ok(output) = cmd.output()
-        && output.status.success()
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(stdout.lines().map(|s| s.to_string()).collect());
+pub fn get_container_logs(provider: &dyn CommandProvider, id: &str, limit: usize) -> Result<Vec<String>> {
+    if let Ok(output) = provider.run("docker", &["logs", "--tail", &limit.to_string(), id]) {
+        if output.success {
+            let stdout = output.stdout;
+            return Ok(stdout.lines().map(|s| s.to_string()).collect());
+        }
     }
 
-    let mut cmd = Command::new("podman");
-    cmd.args(["logs", "--tail", &limit.to_string(), id]);
-    let output = cmd.output()?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
+    let output = provider.run("podman", &["logs", "--tail", &limit.to_string(), id])
+        .map_err(|e| anyhow::anyhow!("Podman command failed: {}", e))?;
+
+    if output.success {
+        let stdout = output.stdout;
         Ok(stdout.lines().map(|s| s.to_string()).collect())
     } else {
         Err(anyhow::anyhow!(
             "Failed to get logs for container {}: {}",
             id,
-            String::from_utf8_lossy(&output.stderr)
+            output.stderr.trim()
         ))
     }
 }
+

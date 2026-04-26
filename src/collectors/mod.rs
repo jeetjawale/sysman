@@ -62,16 +62,16 @@ pub fn collect_snapshot(
 
     let disks = storage::collect_disks();
     let processes = procs::collect_processes(sys, process_limit, ProcessSort::Cpu);
-    let services = systemd::collect_services(service_state, 50).unwrap_or_default();
+    let services = systemd::collect_services(provider, service_state, 50).unwrap_or_default();
     let service_summary = if cfg!(target_os = "linux") {
-        systemd::count_systemd_services()
+        systemd::count_systemd_services(provider)
             .ok()
             .map(|(running, failed)| ServiceSummary { running, failed })
     } else {
         None
     };
     let service_state_counts = if cfg!(target_os = "linux") {
-        systemd::count_service_states().ok()
+        systemd::count_service_states(provider).ok()
     } else {
         None
     };
@@ -102,9 +102,10 @@ pub fn collect_snapshot(
         services,
         service_summary,
         service_state_counts,
-        containers: containers::collect_containers(),
+        containers: containers::collect_containers(provider),
     })
 }
+
 
 // ---------------------------------------------------------------------------
 // Shared utilities
