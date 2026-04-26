@@ -946,16 +946,16 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
     let mut devices: Vec<GpuRuntimeDevice> = Vec::new();
     // Find all "card<N>" blocks. We look for `"card` as a marker.
     let mut remaining = text;
-    let mut card_index: u32 = 0;
     while let Some(card_start) = remaining.find("\"card") {
         remaining = &remaining[card_start + 1..];
         // Extract the card name to get the index
         let name_end = remaining.find('"').unwrap_or(0);
         let card_name = &remaining[..name_end]; // e.g. "card0"
-        let idx = card_name
-            .trim_start_matches("card")
-            .parse::<u32>()
-            .unwrap_or(card_index);
+        
+        let Ok(idx) = card_name.trim_start_matches("card").parse::<u32>() else {
+            continue; // Skip if it's an internal key like "card_info"
+        };
+
         // Find the opening brace of the card object
         let brace_start = match remaining.find('{') {
             Some(pos) => pos,
@@ -1030,7 +1030,6 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
         });
 
         remaining = &remaining[brace_start + brace_end..];
-        card_index += 1;
     }
     if devices.is_empty() {
         None
