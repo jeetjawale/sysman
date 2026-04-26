@@ -182,12 +182,16 @@ pub fn collect_directory_sizes_with_depth(
 }
 
 pub fn collect_large_files(path: &str, limit: usize) -> Vec<(String, u64)> {
-    let cmd = format!(
-        "find '{}' -xdev -type f -printf '%s\\t%p\\n' 2>/dev/null | sort -nr | head -n {}",
-        path.replace('\'', "'\"'\"'"),
-        limit
-    );
-    let output = ProcessCommand::new("sh").args(["-c", &cmd]).output();
+    let output = ProcessCommand::new("sh")
+        .args([
+            "-c",
+            "find \"$1\" -xdev -type f -printf '%s\\t%p\\n' 2>/dev/null | sort -nr | head -n \"$2\"",
+            "--", // $0
+            path, // $1
+            &limit.to_string(), // $2
+        ])
+        .output();
+        
     let Ok(output) = output else {
         return Vec::new();
     };
