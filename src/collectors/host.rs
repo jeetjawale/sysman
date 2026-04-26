@@ -951,7 +951,7 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
         // Extract the card name to get the index
         let name_end = remaining.find('"').unwrap_or(0);
         let card_name = &remaining[..name_end]; // e.g. "card0"
-        
+
         let Ok(idx) = card_name.trim_start_matches("card").parse::<u32>() else {
             continue; // Skip if it's an internal key like "card_info"
         };

@@ -191,7 +191,7 @@ pub fn collect_large_files(path: &str, limit: usize) -> Vec<(String, u64)> {
             &limit.to_string(), // $2
         ])
         .output();
-        
+
     let Ok(output) = output else {
         return Vec::new();
     };
