@@ -918,9 +918,16 @@ fn collect_rocm_gpu_runtime() -> Option<Vec<GpuRuntimeDevice>> {
 /// ```
 fn collect_rocm_json() -> Option<Vec<GpuRuntimeDevice>> {
     let output = ProcessCommand::new("rocm-smi")
-        .args(["--showproductname", "--showuse", "--showtemp",
-               "--showmeminfo", "vram", "--showpower", "--showfan",
-               "--json"])
+        .args([
+            "--showproductname",
+            "--showuse",
+            "--showtemp",
+            "--showmeminfo",
+            "vram",
+            "--showpower",
+            "--showfan",
+            "--json",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -940,12 +947,7 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
     // Find all "card<N>" blocks. We look for `"card` as a marker.
     let mut remaining = text;
     let mut card_index: u32 = 0;
-    loop {
-        // Find next "card block
-        let card_start = match remaining.find("\"card") {
-            Some(pos) => pos,
-            None => break,
-        };
+    while let Some(card_start) = remaining.find("\"card") {
         remaining = &remaining[card_start + 1..];
         // Extract the card name to get the index
         let name_end = remaining.find('"').unwrap_or(0);
@@ -971,8 +973,7 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
             let after_key = &card_obj[pos + needle.len()..];
             let colon = after_key.find(':')? + 1;
             let after_colon = after_key[colon..].trim();
-            if after_colon.starts_with('"') {
-                let inner = &after_colon[1..];
+            if let Some(inner) = after_colon.strip_prefix('"') {
                 let end = inner.find('"').unwrap_or(inner.len());
                 Some(inner[..end].to_string())
             } else {
@@ -990,9 +991,7 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
             .or_else(|| get("GPU ID"))
             .unwrap_or_else(|| format!("AMD GPU {idx}"));
 
-        let utilization_pct = get("GPU use (%)")
-            .as_deref()
-            .and_then(parse_optional_f64);
+        let utilization_pct = get("GPU use (%)").as_deref().and_then(parse_optional_f64);
 
         // Temperature: try edge sensor first, then junction
         let temperature_c = get("Temperature (Sensor edge) (C)")
@@ -1006,9 +1005,7 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
             .as_deref()
             .and_then(parse_optional_f64);
 
-        let fan_pct = get("Fan speed (%)")
-            .as_deref()
-            .and_then(parse_optional_f64);
+        let fan_pct = get("Fan speed (%)").as_deref().and_then(parse_optional_f64);
 
         // VRAM in bytes → convert to MiB
         let memory_total_mib = get("VRAM Total Memory (B)")
@@ -1035,7 +1032,11 @@ fn rocm_parse_json(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
         remaining = &remaining[brace_start + brace_end..];
         card_index += 1;
     }
-    if devices.is_empty() { None } else { Some(devices) }
+    if devices.is_empty() {
+        None
+    } else {
+        Some(devices)
+    }
 }
 
 /// Find the index of the `}` that closes the opening `{` at position 0.
@@ -1058,8 +1059,8 @@ fn find_matching_brace(text: &str) -> Option<usize> {
 
 /// Fallback: run rocm-smi with individual flags and parse the plain-text output.
 ///
-/// rocm-smi plain text looks like:
-/// ```
+/// Example output format:
+/// ```text
 /// ======================== ROCm System Management Interface ========================
 /// ================================= Concise Info ==================================
 /// GPU  Temp   AvgPwr  SCLK     MCLK     Fan     Perf  PwrCap  VRAM%  GPU%
@@ -1068,8 +1069,13 @@ fn find_matching_brace(text: &str) -> Option<usize> {
 fn collect_rocm_plain_text() -> Option<Vec<GpuRuntimeDevice>> {
     // Use the concise output (always available, no flags needed in old versions)
     let output = ProcessCommand::new("rocm-smi")
-        .args(["--showproductname", "--showuse", "--showtemp",
-               "--showpower", "--showfan"])
+        .args([
+            "--showproductname",
+            "--showuse",
+            "--showtemp",
+            "--showpower",
+            "--showfan",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -1081,21 +1087,19 @@ fn collect_rocm_plain_text() -> Option<Vec<GpuRuntimeDevice>> {
     for line in text.lines() {
         let trimmed = line.trim();
         // Lines like "GPU[0]\t\t: key: value" or "GPU[0] : key value"
-        if trimmed.starts_with("GPU[") {
-            if let Some(bracket_end) = trimmed.find(']') {
-                if let Ok(idx) = trimmed[4..bracket_end].parse::<u32>() {
-
-                    // Extract the key-value after the colon following the GPU[N]
-                    if let Some(rest) = trimmed[bracket_end + 1..].splitn(2, ':').nth(1) {
-                        let rest = rest.trim();
-                        // The rest may be "key: value" or just "key value"
-                        if let Some((k, v)) = rest.split_once(':') {
-                            gpu_blocks
-                                .entry(idx)
-                                .or_default()
-                                .push((k.trim().to_string(), v.trim().to_string()));
-                        }
-                    }
+        if trimmed.starts_with("GPU[")
+            && let Some(bracket_end) = trimmed.find(']')
+            && let Ok(idx) = trimmed[4..bracket_end].parse::<u32>()
+        {
+            // Extract the key-value after the colon following the GPU[N]
+            if let Some(rest) = trimmed[bracket_end + 1..].split_once(':').map(|x| x.1) {
+                let rest = rest.trim();
+                // The rest may be "key: value" or just "key value"
+                if let Some((k, v)) = rest.split_once(':') {
+                    gpu_blocks
+                        .entry(idx)
+                        .or_default()
+                        .push((k.trim().to_string(), v.trim().to_string()));
                 }
             }
         }
@@ -1124,22 +1128,29 @@ fn collect_rocm_plain_text() -> Option<Vec<GpuRuntimeDevice>> {
                 utilization_pct: get("GPU use (%)").as_deref().and_then(parse_optional_f64),
                 temperature_c: get("Temperature (Sensor edge) (C)")
                     .or_else(|| get("Temperature (Sensor junction) (C)"))
-                    .as_deref().and_then(parse_optional_f64),
+                    .as_deref()
+                    .and_then(parse_optional_f64),
                 power_w: get("Average Graphics Package Power (W)")
-                    .as_deref().and_then(parse_optional_f64),
-                fan_pct: get("Fan speed (%)")
-                    .as_deref().and_then(parse_optional_f64),
+                    .as_deref()
+                    .and_then(parse_optional_f64),
+                fan_pct: get("Fan speed (%)").as_deref().and_then(parse_optional_f64),
                 memory_used_mib: None,
                 memory_total_mib: None,
             }
         })
         .collect();
     devices.sort_by_key(|d| d.index);
-    if devices.is_empty() { None } else { Some(devices) }
+    if devices.is_empty() {
+        None
+    } else {
+        Some(devices)
+    }
 }
 
-/// Parse the compact table that `rocm-smi` alone (no flags) prints:
-/// ```
+/// Parse the compact table that `rocm-smi` alone (no flags) prints.
+///
+/// Example output format:
+/// ```text
 /// GPU  Temp   AvgPwr  SCLK  MCLK  Fan   Perf  PwrCap  VRAM%  GPU%
 /// 0    67.0c  210W    ...   ...   55%   auto  300W    16%    42%
 /// ```
@@ -1157,32 +1168,34 @@ fn collect_rocm_concise(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
             header_line = Some(cols);
             continue;
         }
-        if let Some(ref headers) = header_line {
-            if let Some(&gpu_str) = cols.first() {
-                if let Ok(idx) = gpu_str.parse::<u32>() {
-                    let col = |name: &str| -> Option<&str> {
-                        headers.iter().position(|h| h.eq_ignore_ascii_case(name))
-                            .and_then(|i| cols.get(i))
-                            .copied()
-                    };
-                    let strip_suffix = |s: &str| -> Option<f64> {
-                        parse_optional_f64(s)
-                    };
-                    devices.push(GpuRuntimeDevice {
-                        index: idx,
-                        uuid: None,
-                        name: format!("AMD GPU {idx}"),
-                        utilization_pct: col("GPU%").and_then(strip_suffix),
-                        temperature_c: col("Temp").and_then(strip_suffix),
-                        power_w: col("AvgPwr").and_then(strip_suffix),
-                        fan_pct: col("Fan").and_then(strip_suffix),
-                        memory_used_mib: None,
-                        memory_total_mib: None,
-                    });
-                }
-            }
+        if let Some(ref headers) = header_line
+            && let Some(&gpu_str) = cols.first()
+            && let Ok(idx) = gpu_str.parse::<u32>()
+        {
+            let col = |name: &str| -> Option<&str> {
+                headers
+                    .iter()
+                    .position(|h| h.eq_ignore_ascii_case(name))
+                    .and_then(|i| cols.get(i))
+                    .copied()
+            };
+            let strip_suffix = |s: &str| -> Option<f64> { parse_optional_f64(s) };
+            devices.push(GpuRuntimeDevice {
+                index: idx,
+                uuid: None,
+                name: format!("AMD GPU {idx}"),
+                utilization_pct: col("GPU%").and_then(strip_suffix),
+                temperature_c: col("Temp").and_then(strip_suffix),
+                power_w: col("AvgPwr").and_then(strip_suffix),
+                fan_pct: col("Fan").and_then(strip_suffix),
+                memory_used_mib: None,
+                memory_total_mib: None,
+            });
         }
     }
-    if devices.is_empty() { None } else { Some(devices) }
+    if devices.is_empty() {
+        None
+    } else {
+        Some(devices)
+    }
 }
-

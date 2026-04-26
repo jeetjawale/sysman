@@ -6,10 +6,11 @@ use ratatui::{
     prelude::*,
     widgets::{Axis, Chart, Dataset, GraphType, Paragraph},
 };
+use std::collections::HashMap;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     let alerts = active_alerts(app, snapshot);
-    let health_score = system_health_score(snapshot, alerts.len());
+    let health_score = system_health_score(app, snapshot, alerts.len());
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
@@ -182,7 +183,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
         .split(sections[2]);
 
     frame.render_widget(overview(app, snapshot, &alerts, health_score), bottom[0]);
-    frame.render_widget(top_offenders(app, snapshot), bottom[1]);
+    frame.render_widget(top_offenders(app, snapshot, &app.theme), bottom[1]);
     frame.render_widget(network_preview(app), bottom[2]);
 }
 
@@ -234,7 +235,7 @@ fn network_chart(app: &App) -> Chart<'_> {
 fn overview(
     app: &App,
     snapshot: &Snapshot,
-    alerts: &[String],
+    alerts: &[(String, String)],
     health_score: i32,
 ) -> Paragraph<'static> {
     let mut lines = vec![
@@ -255,14 +256,20 @@ fn overview(
         widgets::kv_line(&app.theme, "Health", &format!("{health_score}/100")),
     ];
 
-    if let Some(first_alert) = alerts.first() {
-        lines.push(Line::from(vec![
-            Span::styled("Alert: ", Style::default().fg(app.theme.status_error)),
-            Span::styled(
-                collectors::truncate(first_alert, 28),
-                Style::default().fg(app.theme.status_error),
-            ),
-        ]));
+    if !alerts.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Smart Insight:",
+            Style::default()
+                .fg(app.theme.brand)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            app.explain_system_status(),
+            Style::default()
+                .fg(app.theme.text_secondary)
+                .add_modifier(Modifier::ITALIC),
+        )));
     } else {
         lines.push(Line::from(vec![
             Span::styled("Alert: ", Style::default().fg(app.theme.status_good)),
@@ -273,80 +280,83 @@ fn overview(
     Paragraph::new(lines).block(widgets::block(&app.theme, "Overview"))
 }
 
-fn top_offenders(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
+fn top_offenders(app: &App, snapshot: &Snapshot, theme: &Theme) -> Paragraph<'static> {
     let mut lines: Vec<Line> = Vec::new();
-    let top_cpu = snapshot
-        .processes
-        .iter()
-        .max_by(|a, b| a.cpu.total_cmp(&b.cpu));
-    let top_mem = snapshot
-        .processes
-        .iter()
-        .max_by_key(|process| process.memory);
+
+    let (cpu_offender, mem_offender) = collectors::procs::find_top_offenders(&snapshot.processes);
+
+    if let Some(p) = cpu_offender {
+        let reason = if p.cpu > 50.0 { " [SPIKE]" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled("CPU: ", Style::default().fg(theme.text_secondary)),
+            Span::raw(format!(
+                "{} {:.1}%",
+                collectors::truncate(&p.name, 16),
+                p.cpu
+            )),
+            Span::styled(
+                reason,
+                Style::default()
+                    .fg(theme.status_error)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    if let Some(p) = mem_offender {
+        let reason = if p.memory > 1024 * 1024 * 1024 {
+            " [HEAVY]"
+        } else {
+            ""
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Mem: ", Style::default().fg(theme.text_secondary)),
+            Span::raw(format!(
+                "{} {}",
+                collectors::truncate(&p.name, 16),
+                collectors::format_bytes(p.memory)
+            )),
+            Span::styled(
+                reason,
+                Style::default()
+                    .fg(theme.status_warn)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
     let top_disk = app
         .disk_io_rows
         .iter()
         .max_by_key(|row| row.read_bps + row.write_bps);
+    if let Some(row) = top_disk {
+        lines.push(Line::from(vec![
+            Span::styled("Disk: ", Style::default().fg(theme.text_secondary)),
+            Span::raw(format!(
+                "{} r:{} w:{}",
+                row.device,
+                widgets::format_rate(row.read_bps),
+                widgets::format_rate(row.write_bps)
+            )),
+        ]));
+    }
+
     let top_net = app
         .network_process_rows
         .iter()
         .max_by_key(|row| row.rx_bps + row.tx_bps);
+    if let Some(row) = top_net {
+        lines.push(Line::from(vec![
+            Span::styled("Net: ", Style::default().fg(theme.text_secondary)),
+            Span::raw(format!(
+                "{} {}",
+                collectors::truncate(&row.process, 16),
+                widgets::format_rate(row.rx_bps + row.tx_bps)
+            )),
+        ]));
+    }
 
-    lines.push(widgets::kv_line(
-        &app.theme,
-        "CPU",
-        &top_cpu
-            .map(|process| {
-                format!(
-                    "{} {:.1}%",
-                    collectors::truncate(&process.name, 16),
-                    process.cpu
-                )
-            })
-            .unwrap_or_else(|| "n/a".into()),
-    ));
-    lines.push(widgets::kv_line(
-        &app.theme,
-        "Memory",
-        &top_mem
-            .map(|process| {
-                format!(
-                    "{} {}",
-                    collectors::truncate(&process.name, 14),
-                    collectors::format_bytes(process.memory)
-                )
-            })
-            .unwrap_or_else(|| "n/a".into()),
-    ));
-    lines.push(widgets::kv_line(
-        &app.theme,
-        "Disk I/O",
-        &top_disk
-            .map(|row| {
-                format!(
-                    "{} r:{} w:{}",
-                    row.device,
-                    widgets::format_rate(row.read_bps),
-                    widgets::format_rate(row.write_bps)
-                )
-            })
-            .unwrap_or_else(|| "n/a".into()),
-    ));
-    lines.push(widgets::kv_line(
-        &app.theme,
-        "Network",
-        &top_net
-            .map(|row| {
-                format!(
-                    "{} {}",
-                    collectors::truncate(&row.process, 14),
-                    widgets::format_rate(row.rx_bps + row.tx_bps)
-                )
-            })
-            .unwrap_or_else(|| "n/a".into()),
-    ));
-
-    Paragraph::new(lines).block(widgets::block(&app.theme, "Top Offenders"))
+    Paragraph::new(lines).block(widgets::block(theme, "Top Offenders"))
 }
 
 fn network_preview(app: &App) -> Paragraph<'static> {
@@ -401,31 +411,46 @@ fn disk_summary_color(theme: &Theme, snapshot: &Snapshot) -> Color {
         .unwrap_or(theme.text_secondary)
 }
 
-fn active_alerts(app: &App, snapshot: &Snapshot) -> Vec<String> {
+fn active_alerts(app: &App, snapshot: &Snapshot) -> Vec<(String, String)> {
     let mut alerts = Vec::new();
     let mem_pct = collectors::percentage(snapshot.used_memory, snapshot.total_memory);
 
-    if snapshot.cpu_usage >= 85.0 {
-        alerts.push(format!("High CPU {:.1}%", snapshot.cpu_usage));
+    if snapshot.cpu_usage >= app.config.thresholds.cpu_high {
+        alerts.push((
+            "Critical CPU Usage".into(),
+            format!(
+                "{:.1}% load on {} cores",
+                snapshot.cpu_usage, snapshot.cpu_cores
+            ),
+        ));
     }
-    if mem_pct >= 85.0 {
-        alerts.push(format!("High memory {:.1}%", mem_pct));
+    if mem_pct >= app.config.thresholds.mem_high as f64 {
+        alerts.push((
+            "Low System Memory".into(),
+            format!("{:.1}% RAM utilized", mem_pct),
+        ));
     }
     if let Some(disk) = snapshot
         .disks
         .iter()
         .max_by(|a, b| a.usage.total_cmp(&b.usage))
-        && disk.usage >= 90.0
+        && disk.usage >= app.config.thresholds.disk_high as f64
     {
-        alerts.push(format!("Disk {} at {:.1}%", disk.mount, disk.usage));
+        alerts.push((
+            "Disk Space Low".into(),
+            format!("{} is {:.1}% full", disk.mount, disk.usage),
+        ));
     }
     if let Some(summary) = snapshot.service_summary
         && summary.failed > 0
     {
-        alerts.push(format!("{} failed services", summary.failed));
+        alerts.push((
+            "Failed Services".into(),
+            format!("{} system units failed", summary.failed),
+        ));
     }
-    if log_error_spike(app) {
-        alerts.push("Log error spike detected".into());
+    if let Some(explanation) = log_error_spike_explanation(app) {
+        alerts.push(("Log Error Spike".into(), format!("Trend: {}", explanation)));
     }
     let suspicious_count = snapshot
         .processes
@@ -433,14 +458,59 @@ fn active_alerts(app: &App, snapshot: &Snapshot) -> Vec<String> {
         .filter(|p| p.suspicious.is_some())
         .count();
     if suspicious_count > 0 {
-        alerts.push(format!("{suspicious_count} suspicious process(es)"));
+        alerts.push((
+            "Security Warning".into(),
+            format!("{suspicious_count} process(es) with suspicious traits"),
+        ));
     }
 
     alerts
 }
 
+fn log_error_spike_explanation(app: &App) -> Option<String> {
+    use crate::app::is_error_line;
+    let lines: Vec<&String> = app
+        .logs_journal
+        .iter()
+        .chain(app.logs_syslog.iter())
+        .chain(app.logs_dmesg.iter())
+        .collect();
+    if lines.len() < 20 {
+        return None;
+    }
 
-fn system_health_score(snapshot: &Snapshot, alert_count: usize) -> i32 {
+    let split = lines.len() / 2;
+    let second_half: Vec<_> = lines[split..]
+        .iter()
+        .filter(|line| is_error_line(line))
+        .collect();
+
+    if second_half.len() < 6 {
+        return None;
+    }
+
+    // Heuristic: find the most common keyword in the spike
+    let mut keywords = HashMap::new();
+    for line in &second_half {
+        for word in line.split_whitespace() {
+            if word.len() > 4 && word.chars().all(|c| c.is_alphabetic()) {
+                *keywords.entry(word.to_lowercase()).or_insert(0) += 1;
+            }
+        }
+    }
+    let top_word = keywords
+        .into_iter()
+        .max_by_key(|&(_, count)| count)
+        .map(|(word, _)| word);
+
+    if let Some(word) = top_word {
+        Some(format!("surge in errors containing '{}'", word))
+    } else {
+        Some("unusually high error frequency".into())
+    }
+}
+
+fn system_health_score(app: &App, snapshot: &Snapshot, alert_count: usize) -> i32 {
     let mut score = 100.0;
     let mem_pct = collectors::percentage(snapshot.used_memory, snapshot.total_memory);
     let swap_pct = collectors::percentage(snapshot.used_swap, snapshot.total_swap);
@@ -455,39 +525,17 @@ fn system_health_score(snapshot: &Snapshot, alert_count: usize) -> i32 {
         .filter(|p| p.suspicious.is_some())
         .count();
 
-    score -= (snapshot.cpu_usage as f64 * 0.25).min(25.0);
-    score -= (mem_pct * 0.25).min(25.0);
+    // Use config thresholds to weight penalties
+    let cpu_weight = 25.0 / (app.config.thresholds.cpu_high as f64).max(1.0);
+    let mem_weight = 25.0 / (app.config.thresholds.mem_high as f64).max(1.0);
+    let disk_weight = 20.0 / (app.config.thresholds.disk_high as f64).max(1.0);
+
+    score -= (snapshot.cpu_usage as f64 * cpu_weight).min(25.0);
+    score -= (mem_pct * mem_weight).min(25.0);
     score -= (swap_pct * 0.15).min(15.0);
-    score -= (worst_disk * 0.2).min(20.0);
+    score -= (worst_disk * disk_weight).min(20.0);
     score -= (alert_count as f64 * 4.0).min(20.0);
     score -= (suspicious_count as f64 * 5.0).min(10.0);
 
     score.round().clamp(0.0, 100.0) as i32
 }
-
-
-fn log_error_spike(app: &App) -> bool {
-    use crate::app::is_error_line;
-    let lines: Vec<&String> = app
-        .logs_journal
-        .iter()
-        .chain(app.logs_syslog.iter())
-        .chain(app.logs_dmesg.iter())
-        .collect();
-    if lines.len() < 20 {
-        return false;
-    }
-
-    let split = lines.len() / 2;
-    let first_half_errors = lines[..split]
-        .iter()
-        .filter(|line| is_error_line(line))
-        .count();
-    let second_half_errors = lines[split..]
-        .iter()
-        .filter(|line| is_error_line(line))
-        .count();
-
-    second_half_errors >= 6 && second_half_errors >= first_half_errors.saturating_mul(2).max(3)
-}
-

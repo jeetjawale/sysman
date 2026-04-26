@@ -4,7 +4,7 @@ use crate::collectors::{
     self, ConnectionRow, DiskIoCounters, DiskIoRow, ProcessNetRow, ProcessRow,
     ServiceFailureDetails, SmartHealthRow, Snapshot,
 };
-use crate::theme::{Theme, default_theme};
+use crate::theme::{Theme, default_theme, parse_color};
 use crate::ui;
 use anyhow::Result;
 use crossterm::{
@@ -25,8 +25,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use sysinfo::Networks;
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const TICK_RATE: Duration = Duration::from_millis(200);
+const TICK_RATE: Duration = Duration::from_millis(100);
 pub(crate) const HISTORY_CAPACITY: usize = 60;
 
 // ---------------------------------------------------------------------------
@@ -68,7 +67,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
         app.animation_frame = (app.animation_frame + 1) % 60;
         app.last_tick = Instant::now();
 
-        if app.last_refresh.elapsed() >= REFRESH_INTERVAL {
+        if app.last_refresh.elapsed() >= app.refresh_interval {
             app.refresh();
             app.is_loading = false;
         }
@@ -252,13 +251,17 @@ pub(crate) struct App {
     pub error_spike: Option<String>,
     /// Rolling per-refresh error counts (one entry per second tick, capacity 60).
     pub error_count_history: VecDeque<u32>,
-    pub process_open_files: Vec<String>,
+    pub process_open_files: Result<Vec<String>, String>,
     pub process_open_ports: Vec<String>,
     pub process_detail_error: Option<String>,
     pub process_cmdline: Option<String>,
     pub process_environ: Vec<String>,
     pub process_maps: Vec<String>,
     pub network_tool_output: Vec<String>,
+    pub container_view_logs: bool,
+    pub container_logs: Vec<String>,
+    pub container_logs_error: Option<String>,
+    pub container_logs_id: Option<String>,
     pub animation_frame: u32,
     pub is_loading: bool,
     pub anim_manager: AnimationManager,
@@ -279,6 +282,8 @@ pub(crate) struct App {
     process_memory_baseline: HashMap<String, u64>,
     process_growth_streaks: HashMap<String, u8>,
     disk_scan_receiver: Option<Receiver<DiskScanEvent>>,
+    pub(crate) config: crate::config::Config,
+    pub(crate) refresh_interval: Duration,
 }
 
 impl App {
@@ -286,6 +291,17 @@ impl App {
         let mut sys = sysinfo::System::new_all();
         sys.refresh_all();
         sys.refresh_cpu_usage();
+        let config = crate::config::Config::load();
+        let refresh_interval = Duration::from_millis(config.refresh_rate_ms);
+        let mut theme = default_theme();
+        if let Some(color_str) = &config.theme.brand_color
+            && let Ok(color) = parse_color(color_str)
+        {
+            theme.brand = color;
+            theme.border_active = color;
+            theme.active_tab = color;
+        }
+
         Self {
             active_tab: Tab::Overview,
             snapshot: None,
@@ -295,7 +311,7 @@ impl App {
             service_failure_details: None,
             service_failure_error: None,
             status_line: "Loading system snapshot...".into(),
-            last_refresh: Instant::now() - REFRESH_INTERVAL,
+            last_refresh: Instant::now() - refresh_interval,
             last_tick: Instant::now(),
             process_scroll: 0,
             container_scroll: 0,
@@ -322,7 +338,6 @@ impl App {
             connection_state_filter: ConnectionStateFilter::All,
             service_state_filter: ServiceState::Running,
             pending_g: false,
-            theme: default_theme(),
             histories: HistoryStore::default(),
             networks: Networks::new_with_refreshed_list(),
             interfaces: Vec::new(),
@@ -344,7 +359,7 @@ impl App {
             logs_dmesg: Vec::new(),
             error_spike: None,
             error_count_history: VecDeque::new(),
-            process_open_files: Vec::new(),
+            process_open_files: Ok(Vec::new()),
             process_open_ports: Vec::new(),
             process_detail_error: None,
             process_cmdline: None,
@@ -370,6 +385,13 @@ impl App {
             process_memory_baseline: HashMap::new(),
             process_growth_streaks: HashMap::new(),
             disk_scan_receiver: None,
+            container_view_logs: false,
+            container_logs: Vec::new(),
+            container_logs_error: None,
+            container_logs_id: None,
+            config,
+            refresh_interval,
+            theme,
         }
     }
 
@@ -434,11 +456,95 @@ impl App {
                 if self.active_tab == Tab::Processes {
                     self.refresh_selected_process_details();
                 }
+                if self.active_tab == Tab::Containers && self.container_view_logs {
+                    self.refresh_selected_container_logs();
+                }
             }
             Err(error) => self.status_line = format!("Refresh failed: {error}"),
         }
 
         self.last_refresh = Instant::now();
+    }
+
+    pub(crate) fn act_on_selected_container(&mut self, action: &str) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            self.status_line = "No snapshot loaded".into();
+            return;
+        };
+        if snapshot.containers.is_empty() {
+            self.status_line = "No containers found".into();
+            return;
+        }
+        let index = self
+            .container_scroll
+            .min(snapshot.containers.len().saturating_sub(1));
+        let id = snapshot.containers[index].id.clone();
+        let name = snapshot.containers[index].name.clone();
+
+        match collectors::containers::act_on_container(&id, action) {
+            Ok(_) => {
+                self.status_line = format!("{} sent to container {} ({})", action, name, id);
+                self.refresh();
+            }
+            Err(error) => {
+                self.status_line = format!("Failed to {} container: {}", action, error);
+            }
+        }
+    }
+
+    pub(crate) fn refresh_selected_container_logs(&mut self) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return;
+        };
+        if snapshot.containers.is_empty() {
+            return;
+        }
+        let index = self
+            .container_scroll
+            .min(snapshot.containers.len().saturating_sub(1));
+        let id = snapshot.containers[index].id.clone();
+        self.container_logs_id = Some(id.clone());
+
+        match collectors::containers::get_container_logs(&id, 100) {
+            Ok(logs) => {
+                self.container_logs = logs;
+                self.container_logs_error = None;
+            }
+            Err(error) => {
+                self.container_logs_error = Some(error.to_string());
+            }
+        }
+    }
+
+    pub(crate) fn explain_system_status(&self) -> String {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return "No data available for analysis.".into();
+        };
+
+        let mut issues = Vec::new();
+        if snapshot.cpu_usage > 70.0 {
+            issues.push("CPU pressure");
+        }
+        let mem_pct = collectors::percentage(snapshot.used_memory, snapshot.total_memory);
+        if mem_pct > 80.0 {
+            issues.push("High memory utilization");
+        }
+        if snapshot.processes.iter().any(|p| p.suspicious.is_some()) {
+            issues.push("Security anomalies detected");
+        }
+        if self.error_spike.is_some() {
+            issues.push("Recent log error surge");
+        }
+
+        if issues.is_empty() {
+            "System is operating within optimal parameters. No significant anomalies detected."
+                .into()
+        } else {
+            format!(
+                "Anomalous behavior detected: {}. Recommendation: Inspect top offenders and verify recent system logs.",
+                issues.join(", ")
+            )
+        }
     }
 
     fn collect_interface_views(
@@ -1371,16 +1477,19 @@ impl App {
 
         let half = len / 2;
         let recent: u32 = self.error_count_history.iter().rev().take(half).sum();
-        let older: u32 = self.error_count_history.iter().rev().skip(half).take(half).sum();
+        let older: u32 = self
+            .error_count_history
+            .iter()
+            .rev()
+            .skip(half)
+            .take(half)
+            .sum();
 
         let spike_threshold = (older as f64 * 2.0).max(3.0);
         self.error_spike = if recent as f64 >= spike_threshold {
             Some(format!(
                 "⚠ error spike: {} errs (recent {}) vs {} errs (prev {})",
-                recent,
-                half,
-                older,
-                half,
+                recent, half, older, half,
             ))
         } else {
             None
@@ -1525,7 +1634,7 @@ impl App {
     }
 
     pub(crate) fn refresh_selected_process_details(&mut self) {
-        self.process_open_files.clear();
+        self.process_open_files = Ok(Vec::new());
         self.process_open_ports.clear();
         self.process_detail_error = None;
         self.process_cmdline = None;
@@ -1545,8 +1654,9 @@ impl App {
         let process_pid = process.pid.clone();
 
         match collectors::procs::collect_open_files(pid, 8) {
-            Ok(files) => self.process_open_files = files,
+            Ok(files) => self.process_open_files = Ok(files),
             Err(error) => {
+                self.process_open_files = Err(error.clone());
                 self.process_detail_error = Some(format!("Open files unavailable: {error}"));
             }
         }
@@ -1566,7 +1676,7 @@ impl App {
             self.histories
                 .process_cpu
                 .entry(process_pid.clone())
-                .or_insert_with(VecDeque::new)
+                .or_default()
                 .push_back(cpu_usage);
 
             let history = self.histories.process_cpu.get_mut(&process_pid).unwrap();
@@ -1733,12 +1843,8 @@ impl App {
                 Tab::Overview => ui::dashboard::draw(frame, content_area, self, &snapshot),
                 Tab::Cpu => ui::cpu::draw(frame, content_area, self, &snapshot),
                 Tab::Memory => ui::memory::draw(frame, content_area, self, &snapshot),
-                Tab::Processes => {
-                    ui::processes::draw(frame, content_area, self, &snapshot)
-                }
-                Tab::Containers => {
-                    ui::containers::draw(frame, content_area, self, &snapshot)
-                }
+                Tab::Processes => ui::processes::draw(frame, content_area, self, &snapshot),
+                Tab::Containers => ui::containers::draw(frame, content_area, self, &snapshot),
                 Tab::Network => ui::network::draw(frame, content_area, self, &snapshot),
                 Tab::Disk => ui::disks::draw(frame, content_area, self, &snapshot),
                 Tab::Gpu => ui::gpu::draw(frame, content_area, self, &snapshot),

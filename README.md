@@ -1,5 +1,9 @@
 # Sysman
 
+[![CI](https://github.com/jeetjawale/sysman/actions/workflows/ci.yml/badge.svg)](https://github.com/jeetjawale/sysman/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org)
+
 `sysman` is a terminal system monitor with a TUI and CLI.
 
 ## Currently available
@@ -16,38 +20,65 @@
 - GPU tab: device telemetry (utilization, VRAM, temperature, power, fan) with history graphs and per-process GPU memory table
 - CLI commands for summary, system, memory, disks, processes, services, and service actions
 
+## Installation
+
+### Prerequisites
+- [Rust](https://www.rust-lang.org/tools/install) (latest stable)
+- `lm-sensors` (for temperature monitoring)
+- `smartmontools` (for S.M.A.R.T. disk health)
+- `docker` / `podman` (for container management)
+
+### Build from source
+```bash
+git clone https://github.com/jeetjawale/sysman
+cd sysman
+cargo build --release
+```
+
+### Install to path
+```bash
+cargo install --path .
+```
+
 ## Usage
 
 ```bash
-cargo run
-cargo run -- tui
-cargo run -- summary
-cargo run -- system
-cargo run -- memory
-cargo run -- disks
-cargo run -- processes --limit 15 --sort memory
-cargo run -- services --state failed
-cargo run -- service ssh status
+sysman         # Launch interactive TUI
+sysman summary # Show high-level health
+sysman system  # Show host/OS info
 ```
 
-## Commands
+## Configuration
 
-```text
-sysman [COMMAND]
+`sysman` loads settings from `~/.config/sysman/config.toml` (or `$XDG_CONFIG_HOME/sysman/config.toml`).
 
-Commands:
-  tui        Launch the interactive TUI
-  summary    Show a high-level system health summary
-  system     Show detailed host and OS information
-  memory     Show memory and swap usage
-  disks      Show mounted disks and capacity usage
-  processes  Show top processes
-  services   Inspect services through systemd on Linux hosts
-  service    Perform an action on a service through systemctl
+### Default Config
+```toml
+refresh_rate_ms = 1000
+
+[thresholds]
+cpu_high = 85.0
+mem_high = 90.0
+disk_high = 95.0
+
+[theme]
+brand_color = "#8B5CF6" # Modern Purple
 ```
+
+- **refresh_rate_ms**: How often the UI updates.
+- **thresholds**: Set your own limits for critical resource alerts.
+- **brand_color**: Customize the accent color of the TUI (Hex format).
+
+## Screenshots
+
+![Dashboard Placeholder](https://via.placeholder.com/800x450.png?text=Sysman+Dashboard+TUI)
+*Run `sysman` to see the live interactive dashboard.*
 
 ## Notes
 
-- Running `sysman` with no command launches the TUI.
-- Service management targets Linux hosts using `systemd`.
-- `start`, `stop`, and `restart` may require elevated privileges.
+- **Linux-First**: `sysman` is optimized for Linux. Some features (Services, GPU, Containers) require specific system tools or drivers.
+- **Permissions**: Container lifecycle actions and some hardware stats may require `sudo` or group membership (e.g., `docker` group).
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.

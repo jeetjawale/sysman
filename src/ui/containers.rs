@@ -3,10 +3,17 @@ use crate::collectors::{self, Snapshot};
 use crate::ui::widgets;
 use ratatui::{
     prelude::*,
-    widgets::{Cell, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState},
+    widgets::{
+        Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
+    },
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
+    if app.container_view_logs {
+        draw_logs(frame, area, app);
+        return;
+    }
+
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Min(10)])
@@ -28,7 +35,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     state.select(Some(app.container_scroll));
 
     frame.render_stateful_widget(
-        container_table(app, snapshot, app.container_scroll, widgets::visible_rows(sections[1], 4)),
+        container_table(
+            app,
+            snapshot,
+            app.container_scroll,
+            widgets::visible_rows(sections[1], 4),
+        ),
         sections[1],
         &mut state,
     );
@@ -42,8 +54,14 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &Snapshot) {
     frame.render_stateful_widget(scrollbar, sections[1], &mut scrollbar_state);
 }
 
-fn container_table<'a>(app: &App, snapshot: &'a Snapshot, offset: usize, height: usize) -> Table<'a> {
-    let rows: Vec<Row> = snapshot.containers
+fn container_table<'a>(
+    app: &App,
+    snapshot: &'a Snapshot,
+    offset: usize,
+    height: usize,
+) -> Table<'a> {
+    let rows: Vec<Row> = snapshot
+        .containers
         .iter()
         .enumerate()
         .skip(offset.min(snapshot.containers.len()))
@@ -56,8 +74,10 @@ fn container_table<'a>(app: &App, snapshot: &'a Snapshot, offset: usize, height:
             };
 
             Row::new(vec![
-                Cell::from(c.id.chars().take(12).collect::<String>()).style(Style::default().fg(app.theme.status_info)),
-                Cell::from(collectors::truncate(&c.name, 20)).style(Style::default().add_modifier(Modifier::BOLD)),
+                Cell::from(c.id.chars().take(12).collect::<String>())
+                    .style(Style::default().fg(app.theme.status_info)),
+                Cell::from(collectors::truncate(&c.name, 20))
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
                 Cell::from(collectors::truncate(&c.image, 24)),
                 Cell::from(c.status.clone()),
                 Cell::from(c.cpu.clone()).style(Style::default().fg(app.theme.status_warn)),
@@ -89,7 +109,18 @@ fn container_table<'a>(app: &App, snapshot: &'a Snapshot, offset: usize, height:
         ],
     )
     .header(
-        Row::new(vec!["ID", "Name", "Image", "Status", "CPU%", "Mem", "Net I/O", "Block I/O", "PIDs"]).style(
+        Row::new(vec![
+            "ID",
+            "Name",
+            "Image",
+            "Status",
+            "CPU%",
+            "Mem",
+            "Net I/O",
+            "Block I/O",
+            "PIDs",
+        ])
+        .style(
             Style::default()
                 .fg(app.theme.active_tab)
                 .add_modifier(Modifier::BOLD),
@@ -98,7 +129,36 @@ fn container_table<'a>(app: &App, snapshot: &'a Snapshot, offset: usize, height:
     .row_highlight_style(selected_style)
     .block(widgets::active_block(
         &app.theme,
-        "Containers (docker/podman stats)",
+        "Containers (docker/podman stats) | `u` start, `i` stop, `o` restart, `Enter` logs",
         app.animation_frame,
     ))
+}
+
+fn draw_logs(frame: &mut Frame, area: Rect, app: &mut App) {
+    let id = app.container_logs_id.as_deref().unwrap_or("?");
+    let title = format!("Container Logs: {id} | `Esc` back");
+
+    let content = if let Some(error) = &app.container_logs_error {
+        vec![Line::from(vec![
+            Span::styled("Error: ", Style::default().fg(app.theme.status_error)),
+            Span::raw(error),
+        ])]
+    } else if app.container_logs.is_empty() {
+        vec![Line::from("No logs found.")]
+    } else {
+        app.container_logs
+            .iter()
+            .map(|s| Line::from(s.as_str()))
+            .collect()
+    };
+
+    let p = Paragraph::new(content)
+        .block(widgets::active_block(
+            &app.theme,
+            &title,
+            app.animation_frame,
+        ))
+        .wrap(ratatui::widgets::Wrap { trim: false });
+
+    frame.render_widget(p, area);
 }

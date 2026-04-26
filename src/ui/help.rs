@@ -25,7 +25,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "  (h/l or 1..9,0,?)",
+                "  (Tab / h/l or 1..9,0,?)",
                 Style::default().fg(app.theme.text_muted),
             ),
         ]),
@@ -91,12 +91,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
         key_line(
             &app.theme,
             "Processes",
-            "/ filter • s sort • p view • x/z kill • n renice • a pin",
+            "/ filter • s sort • p view • k/K kill • r renice • a pin",
         ),
         key_line(
             &app.theme,
             "Network",
-            "c conn-state • x kill flow • b block IP • t DNS/ping/trace/http",
+            "c conn-state • k kill flow • b block IP • t DNS/ping/trace/http",
         ),
         key_line(
             &app.theme,
@@ -134,7 +134,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
     let config_lines = vec![
         section_title(&app.theme, "Config / Behavior"),
         Line::from(""),
-        key_line(&app.theme, "Refresh", "1s snapshot cycle; UI tick 200ms"),
+        key_line(
+            &app.theme,
+            "Refresh",
+            "Configurable; default 1s snapshot cycle",
+        ),
         key_line(&app.theme, "History", "60 samples for trends/sparklines"),
         key_line(&app.theme, "Process rows", "top 200 processes"),
         key_line(&app.theme, "Service backend", "Linux + systemd required"),
@@ -155,15 +159,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, _snapshot: &Snapshot) 
         ),
         key_line(
             &app.theme,
-            "Persistent config",
-            "none yet; behavior is code/default driven",
+            "Config file",
+            "~/.config/sysman/config.toml (thresholds, colors)",
         ),
         Line::from(""),
         section_title(&app.theme, "Global Keys"),
-        key_line(&app.theme, "h/l", "previous/next tab"),
-        key_line(&app.theme, "j/k", "scroll"),
+        key_line(&app.theme, "Tab / h / l", "cycle / previous / next tab"),
+        key_line(&app.theme, "j / k", "scroll down / up (vim-style)"),
         key_line(&app.theme, "gg / G", "top / bottom"),
-        key_line(&app.theme, "r / q", "refresh / quit"),
+        key_line(&app.theme, "R / q", "force refresh / quit"),
     ];
     frame.render_widget(
         Paragraph::new(config_lines)

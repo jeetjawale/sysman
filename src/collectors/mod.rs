@@ -58,7 +58,7 @@ pub fn collect_snapshot(
     sys.refresh_cpu_usage();
 
     let disks = storage::collect_disks();
-    let processes = procs::collect_processes(&sys, process_limit, ProcessSort::Cpu);
+    let processes = procs::collect_processes(sys, process_limit, ProcessSort::Cpu);
     let services = systemd::collect_services(service_state, 50).unwrap_or_default();
     let service_summary = if cfg!(target_os = "linux") {
         systemd::count_systemd_services()

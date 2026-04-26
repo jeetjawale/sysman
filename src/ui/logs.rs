@@ -228,7 +228,6 @@ fn matches_level(line: &str, level: LogLevelFilter) -> bool {
     }
 }
 
-
 fn highlight_line(app: &App, line: &str, regex: Option<&Regex>) -> Line<'static> {
     let Some(regex) = regex else {
         return Line::from(line.to_string());

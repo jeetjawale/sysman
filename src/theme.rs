@@ -54,3 +54,14 @@ pub fn default_theme() -> Theme {
         ],
     }
 }
+
+pub fn parse_color(hex: &str) -> Result<Color, String> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return Err("Hex color must be 6 characters (e.g. #FFFFFF)".into());
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())?;
+    let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())?;
+    let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())?;
+    Ok(Color::Rgb(r, g, b))
+}

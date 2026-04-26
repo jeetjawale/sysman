@@ -185,24 +185,30 @@ fn linux_process_groups(pid: u32) -> (String, String) {
                 service = Some((*token).to_string());
             }
 
-            if container.is_none()
-                && token.starts_with("docker-")
-                && token.ends_with(".scope")
-                && token.len() > "docker-.scope".len()
-            {
+            if container.is_none() && (token.starts_with("docker-") || token.starts_with("crio-")) {
                 let trimmed = token
                     .trim_start_matches("docker-")
+                    .trim_start_matches("crio-")
                     .trim_end_matches(".scope");
                 container = Some(short_container_id(trimmed));
             }
+
             if container.is_none()
-                && token.starts_with("crio-")
-                && token.ends_with(".scope")
-                && token.len() > "crio-.scope".len()
+                && (token.contains("kubepods")
+                    || token.contains("docker")
+                    || token.contains("podman"))
             {
-                let trimmed = token.trim_start_matches("crio-").trim_end_matches(".scope");
-                container = Some(short_container_id(trimmed));
+                // Look for a 64-char hex string in the token
+                if let Some(pos) = token.find(|c: char| c.is_ascii_hexdigit()) {
+                    let potential_id = &token[pos..];
+                    if potential_id.len() >= 12
+                        && potential_id.chars().take(12).all(|c| c.is_ascii_hexdigit())
+                    {
+                        container = Some(short_container_id(&potential_id[..12]));
+                    }
+                }
             }
+
             if container.is_none() && is_probable_container_id(token) {
                 container = Some(short_container_id(token));
             }
@@ -213,6 +219,15 @@ fn linux_process_groups(pid: u32) -> (String, String) {
         service.unwrap_or_else(|| "-".into()),
         container.unwrap_or_else(|| "-".into()),
     )
+}
+
+pub fn find_top_offenders(processes: &[ProcessRow]) -> (Option<ProcessRow>, Option<ProcessRow>) {
+    let cpu = processes
+        .iter()
+        .max_by(|a, b| a.cpu.total_cmp(&b.cpu))
+        .cloned();
+    let mem = processes.iter().max_by_key(|p| p.memory).cloned();
+    (cpu, mem)
 }
 
 fn is_probable_container_id(token: &str) -> bool {
@@ -254,15 +269,14 @@ pub fn check_suspicious_process(pid: u32, name: &str) -> Option<String> {
 
     // 3. Process name mismatches the exe basename (masquerading).
     //    Skip kernel threads (no exe) and short names (common false positives).
-    if name.len() >= 4 {
-        if let Ok(ref path) = exe_path {
-            if let Some(exe_base) = path.file_name() {
-                let exe_name = exe_base.to_string_lossy();
-                // Allow prefix match (e.g. "python" vs "python3.11")
-                if !exe_name.starts_with(name) && !name.starts_with(exe_name.as_ref()) {
-                    return Some(format!("name '{}' != exe '{}'", name, exe_name));
-                }
-            }
+    if name.len() >= 4
+        && let Ok(ref path) = exe_path
+        && let Some(exe_base) = path.file_name()
+    {
+        let exe_name = exe_base.to_string_lossy();
+        // Allow prefix match (e.g. "python" vs "python3.11")
+        if !exe_name.starts_with(name) && !name.starts_with(exe_name.as_ref()) {
+            return Some(format!("name '{}' != exe '{}'", name, exe_name));
         }
     }
 

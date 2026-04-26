@@ -117,6 +117,14 @@ impl App {
                 self.next_tab();
                 false
             }
+            KeyCode::Tab => {
+                self.next_tab();
+                false
+            }
+            KeyCode::BackTab => {
+                self.previous_tab();
+                false
+            }
             KeyCode::Char('1') => {
                 self.active_tab = Tab::Overview;
                 false
@@ -179,10 +187,6 @@ impl App {
                 self.scroll_up();
                 false
             }
-            KeyCode::Char('k') => {
-                self.scroll_up();
-                false
-            }
 
             // Filter
             KeyCode::Char('/') => {
@@ -200,7 +204,9 @@ impl App {
                 false
             }
             KeyCode::Esc => {
-                if self.active_tab == Tab::Processes {
+                if self.active_tab == Tab::Containers && self.container_view_logs {
+                    self.container_view_logs = false;
+                } else if self.active_tab == Tab::Processes {
                     self.process_filter.clear();
                 } else if self.active_tab == Tab::Logs {
                     self.logs_query.clear();
@@ -226,6 +232,22 @@ impl App {
             }
 
             // Process actions
+            KeyCode::Char('k') => {
+                if self.active_tab == Tab::Processes {
+                    self.kill_selected_process(false);
+                } else if self.active_tab == Tab::Network {
+                    self.kill_selected_connection();
+                } else {
+                    self.scroll_up();
+                }
+                false
+            }
+            KeyCode::Char('K') | KeyCode::Char('z') => {
+                if self.active_tab == Tab::Processes {
+                    self.kill_selected_process(true);
+                }
+                false
+            }
             KeyCode::Char('x') => {
                 if self.active_tab == Tab::Processes {
                     self.kill_selected_process(false);
@@ -234,13 +256,18 @@ impl App {
                 }
                 false
             }
-            KeyCode::Char('z') => {
+            KeyCode::Char('r') => {
                 if self.active_tab == Tab::Processes {
-                    self.kill_selected_process(true);
+                    self.pin_input = false;
+                    self.filter_input = false;
+                    self.renice_input = true;
+                    self.renice_value.clear();
+                } else {
+                    self.refresh();
                 }
                 false
             }
-            KeyCode::Char('r') => {
+            KeyCode::F(5) | KeyCode::Char('R') => {
                 self.refresh();
                 false
             }
@@ -295,6 +322,31 @@ impl App {
                     self.act_on_selected_service("restart");
                 } else if self.active_tab == Tab::Logs {
                     self.cycle_logs_source_filter();
+                } else if self.active_tab == Tab::Containers {
+                    self.act_on_selected_container("restart");
+                }
+                false
+            }
+            KeyCode::Char('u') => {
+                if self.active_tab == Tab::Containers {
+                    self.act_on_selected_container("start");
+                } else if self.active_tab == Tab::Services {
+                    self.act_on_selected_service("start");
+                }
+                false
+            }
+            KeyCode::Char('i') => {
+                if self.active_tab == Tab::Containers {
+                    self.act_on_selected_container("stop");
+                } else if self.active_tab == Tab::Services {
+                    self.act_on_selected_service("stop");
+                }
+                false
+            }
+            KeyCode::Enter => {
+                if self.active_tab == Tab::Containers {
+                    self.container_view_logs = true;
+                    self.refresh_selected_container_logs();
                 }
                 false
             }
@@ -321,19 +373,6 @@ impl App {
                 false
             }
 
-            // Service actions
-            KeyCode::Char('u') => {
-                if self.active_tab == Tab::Services {
-                    self.act_on_selected_service("start");
-                }
-                false
-            }
-            KeyCode::Char('i') => {
-                if self.active_tab == Tab::Services {
-                    self.act_on_selected_service("stop");
-                }
-                false
-            }
             KeyCode::Char('e') => {
                 if self.active_tab == Tab::Services {
                     self.act_on_selected_service("enable");

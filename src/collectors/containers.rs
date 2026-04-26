@@ -1,5 +1,5 @@
-use std::process::Command;
 use anyhow::Result;
+use std::process::Command;
 
 #[derive(Clone, Debug, Default)]
 pub struct ContainerRow {
@@ -24,7 +24,12 @@ pub fn collect_containers() -> Vec<ContainerRow> {
 
 fn collect_docker() -> Result<Vec<ContainerRow>> {
     let output = Command::new("docker")
-        .args(["stats", "--no-stream", "--format", "{{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"])
+        .args([
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -43,7 +48,10 @@ fn collect_docker() -> Result<Vec<ContainerRow>> {
     for line in ps_stdout.lines() {
         let cols: Vec<&str> = line.split('|').collect();
         if cols.len() >= 3 {
-            ps_info.insert(cols[0].to_string(), (cols[1].to_string(), cols[2].to_string()));
+            ps_info.insert(
+                cols[0].to_string(),
+                (cols[1].to_string(), cols[2].to_string()),
+            );
         }
     }
 
@@ -51,7 +59,10 @@ fn collect_docker() -> Result<Vec<ContainerRow>> {
         let cols: Vec<&str> = line.split('|').collect();
         if cols.len() >= 7 {
             let id = cols[0].to_string();
-            let (image, status) = ps_info.get(&id).cloned().unwrap_or(("-".into(), "-".into()));
+            let (image, status) = ps_info
+                .get(&id)
+                .cloned()
+                .unwrap_or(("-".into(), "-".into()));
             rows.push(ContainerRow {
                 id,
                 name: cols[1].into(),
@@ -71,7 +82,12 @@ fn collect_docker() -> Result<Vec<ContainerRow>> {
 
 fn collect_podman() -> Result<Vec<ContainerRow>> {
     let output = Command::new("podman")
-        .args(["stats", "--no-stream", "--format", "{{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"])
+        .args([
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -89,7 +105,10 @@ fn collect_podman() -> Result<Vec<ContainerRow>> {
     for line in ps_stdout.lines() {
         let cols: Vec<&str> = line.split('|').collect();
         if cols.len() >= 3 {
-            ps_info.insert(cols[0].to_string(), (cols[1].to_string(), cols[2].to_string()));
+            ps_info.insert(
+                cols[0].to_string(),
+                (cols[1].to_string(), cols[2].to_string()),
+            );
         }
     }
 
@@ -97,7 +116,10 @@ fn collect_podman() -> Result<Vec<ContainerRow>> {
         let cols: Vec<&str> = line.split('|').collect();
         if cols.len() >= 7 {
             let id = cols[0].to_string();
-            let (image, status) = ps_info.get(&id).cloned().unwrap_or(("-".into(), "-".into()));
+            let (image, status) = ps_info
+                .get(&id)
+                .cloned()
+                .unwrap_or(("-".into(), "-".into()));
             rows.push(ContainerRow {
                 id,
                 name: cols[1].into(),
@@ -113,4 +135,54 @@ fn collect_podman() -> Result<Vec<ContainerRow>> {
     }
 
     Ok(rows)
+}
+
+pub fn act_on_container(id: &str, action: &str) -> Result<()> {
+    // Try Docker then Podman
+    let mut cmd = Command::new("docker");
+    cmd.args([action, id]);
+    if let Ok(output) = cmd.output()
+        && output.status.success()
+    {
+        return Ok(());
+    }
+
+    let mut cmd = Command::new("podman");
+    cmd.args([action, id]);
+    let output = cmd.output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to {} container {}: {}",
+            action,
+            id,
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
+}
+
+pub fn get_container_logs(id: &str, limit: usize) -> Result<Vec<String>> {
+    let mut cmd = Command::new("docker");
+    cmd.args(["logs", "--tail", &limit.to_string(), id]);
+    if let Ok(output) = cmd.output()
+        && output.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Ok(stdout.lines().map(|s| s.to_string()).collect());
+    }
+
+    let mut cmd = Command::new("podman");
+    cmd.args(["logs", "--tail", &limit.to_string(), id]);
+    let output = cmd.output()?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.lines().map(|s| s.to_string()).collect())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to get logs for container {}: {}",
+            id,
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
 }

@@ -62,9 +62,13 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
             Tab::Overview => "",
             Tab::Cpu => "",
             Tab::Memory => "",
-            Tab::Processes => "`/` filter, `s` sort, `p` view, `j/k` scroll, `x` kill, `z` sigkill, `n` renice, `a` pin",
-            Tab::Containers => "`j/k` scroll, `gg/G` jump",
-            Tab::Network => "`/` filter, `c` state, `j/k` scroll, `x` kill, `b` block IP, `t` tools",
+            Tab::Processes => {
+                "`/` filter, `s` sort, `p` view, `j/k` scroll, `k` kill, `K` sigkill, `r` renice, `a` pin"
+            }
+            Tab::Containers => "`j/k` scroll, `gg/G` jump, `u/i/o` lifecycle, `Enter` logs",
+            Tab::Network => {
+                "`/` filter, `c` state, `j/k` scroll, `k` kill, `b` block IP, `t` tools"
+            }
             Tab::Disk => " j/k gg/G f async-scan m depth",
             Tab::Gpu => "",
             Tab::Services => " j/k gg/G s filter u/i/o e/d w/W",
@@ -86,7 +90,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
             Span::styled("◆", Style::default().fg(app.theme.divider)),
             Span::raw(" "),
             Span::styled(
-                "1-9,0",
+                "1-9,0,Tab",
                 Style::default()
                     .fg(app.theme.brand)
                     .add_modifier(Modifier::BOLD),
@@ -100,15 +104,16 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
             ),
             Span::styled(" nav ", Style::default().fg(app.theme.text_muted)),
             Span::styled(tab_hints, Style::default().fg(app.theme.text_muted)),
+            Span::raw(" "),
             Span::styled(
-                "r",
+                "R",
                 Style::default()
                     .fg(app.theme.brand)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" ref", Style::default().fg(app.theme.text_muted)),
+            Span::styled(" ref ", Style::default().fg(app.theme.text_muted)),
             Span::styled(
-                " ?",
+                "?",
                 Style::default()
                     .fg(app.theme.brand)
                     .add_modifier(Modifier::BOLD),

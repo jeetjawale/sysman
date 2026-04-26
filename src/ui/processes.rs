@@ -186,7 +186,9 @@ fn process_table<'a>(
             base_name
         };
         let name_style = if process.suspicious.is_some() {
-            Style::default().fg(app.theme.status_error).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(app.theme.status_error)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -241,7 +243,9 @@ fn process_stats(app: &App, snapshot: &Snapshot, filtered_count: usize) -> Parag
         .filter(|p| p.suspicious.is_some())
         .count();
     let suspicious_style = if suspicious_count > 0 {
-        Style::default().fg(app.theme.status_error).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(app.theme.status_error)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(app.theme.status_good)
     };
@@ -260,8 +264,7 @@ fn process_stats(app: &App, snapshot: &Snapshot, filtered_count: usize) -> Parag
         Span::styled("Suspicious: ", Style::default().fg(app.theme.text_muted)),
         Span::styled(suspicious_count.to_string(), suspicious_style),
     ]));
-    Paragraph::new(lines)
-        .block(widgets::block(&app.theme, "Summary"))
+    Paragraph::new(lines).block(widgets::block(&app.theme, "Summary"))
 }
 
 fn process_guidance<'a>(app: &'a App, snapshot: &'a Snapshot) -> List<'a> {
@@ -309,7 +312,12 @@ fn process_details_panel(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
         .and_then(|p| p.suspicious.as_ref())
     {
         lines.push(Line::from(vec![
-            Span::styled("⚠ Suspicious: ", Style::default().fg(app.theme.status_error).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "⚠ Suspicious: ",
+                Style::default()
+                    .fg(app.theme.status_error)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(reason.clone(), Style::default().fg(app.theme.status_error)),
         ]));
     }
@@ -324,17 +332,18 @@ fn process_details_panel(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
 
     if let Some(history) = app.histories.process_cpu.get(&selected) {
         let sparkline_data: Vec<u64> = history.iter().copied().collect();
-        let max_usage = sparkline_data.iter().copied().max().unwrap_or(0).max(1) as u64;
+        let max_usage = sparkline_data.iter().copied().max().unwrap_or(0).max(1);
         let spark_str = if !sparkline_data.is_empty() {
             let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
             sparkline_data
                 .iter()
                 .map(|&val| {
                     let chars_count = chars.len();
-                    if chars_count == 0 { return ' '; }
+                    if chars_count == 0 {
+                        return ' ';
+                    }
                     let denom = (max_usage as f32 + 1.0).max(1.0);
-                    let idx = ((val as f32 / denom) * (chars_count - 1) as f32)
-                        .round() as usize;
+                    let idx = ((val as f32 / denom) * (chars_count - 1) as f32).round() as usize;
                     chars[idx.min(chars_count - 1)]
                 })
                 .collect::<String>()
@@ -359,11 +368,22 @@ fn process_details_panel(app: &App, snapshot: &Snapshot) -> Paragraph<'static> {
             error.clone(),
             Style::default().fg(app.theme.status_error),
         )));
-    } else if app.process_open_files.is_empty() {
-        lines.push(Line::from("No open file entries"));
     } else {
-        for row in &app.process_open_files {
-            lines.push(Line::from(format!("• {}", collectors::truncate(row, 40))));
+        match &app.process_open_files {
+            Ok(files) if files.is_empty() => {
+                lines.push(Line::from("No open file entries"));
+            }
+            Ok(files) => {
+                for row in files {
+                    lines.push(Line::from(format!("• {}", collectors::truncate(row, 40))));
+                }
+            }
+            Err(error) => {
+                lines.push(Line::from(Span::styled(
+                    error.clone(),
+                    Style::default().fg(app.theme.status_error),
+                )));
+            }
         }
     }
     lines.push(Line::from(""));

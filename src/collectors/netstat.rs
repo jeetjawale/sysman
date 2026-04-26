@@ -518,9 +518,7 @@ fn suspicious_reason(state: &str, remote_ip: &str, remote_port: Option<u16>) -> 
     if state == "SYN-SENT" || state == "SYN-RECV" {
         return Some("SYN handshake pending".into());
     }
-    let Some(port) = remote_port else {
-        return None;
-    };
+    let port = remote_port?;
     if [23u16, 2323, 4444, 5555, 6667, 31337].contains(&port) {
         return Some(format!("Remote port {port} is high-risk"));
     }
