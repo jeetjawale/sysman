@@ -122,8 +122,8 @@ pub fn collect_process_details(pid: u32, limit: usize) -> ProcessDetails {
 }
 
 fn read_cmdline(pid: u32) -> String {
-    if let Ok(content) = fs::read_to_string(format!("/proc/{pid}/cmdline")) {
-        return content
+    if let Ok(content) = fs::read(format!("/proc/{pid}/cmdline")) {
+        return String::from_utf8_lossy(&content)
             .split('\0')
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
