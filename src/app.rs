@@ -1034,9 +1034,9 @@ impl App {
             match sort {
                 ProcessSort::Cpu => processes
                     .sort_by(|a, b| b.cpu.total_cmp(&a.cpu).then_with(|| a.name.cmp(&b.name))),
-                ProcessSort::Memory => processes.sort_by(|a, b| b.memory.cmp(&a.memory)),
+                ProcessSort::Memory => processes.sort_by_key(|p| std::cmp::Reverse(p.memory)),
                 ProcessSort::Pid => processes.sort_by_key(|p| p.pid.parse::<u32>().unwrap_or(0)),
-                ProcessSort::Name => processes.sort_by(|a, b| a.name.cmp(&b.name)),
+                ProcessSort::Name => processes.sort_by_key(|p| &p.name),
             }
         }
 
