@@ -3,6 +3,7 @@ use crate::cli::{ProcessSort, ServiceState};
 use crate::collectors::{
     self, ConnectionRow, DiskIoCounters, DiskIoRow, ProcessNetRow, ProcessRow,
     ServiceFailureDetails, SmartHealthRow, Snapshot,
+    provider::{CommandProvider, RealProvider},
 };
 use crate::theme::{Theme, default_theme, parse_color};
 use crate::ui;
@@ -20,6 +21,7 @@ use regex::Regex;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::process::Command as ProcessCommand;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -284,6 +286,7 @@ pub(crate) struct App {
     disk_scan_receiver: Option<Receiver<DiskScanEvent>>,
     pub(crate) config: crate::config::Config,
     pub(crate) refresh_interval: Duration,
+    pub provider: Arc<dyn CommandProvider>,
 }
 
 impl App {
@@ -392,6 +395,7 @@ impl App {
             config,
             refresh_interval,
             theme,
+            provider: Arc::new(RealProvider),
         }
     }
 
@@ -400,7 +404,12 @@ impl App {
     pub(crate) fn refresh(&mut self) {
         let elapsed = self.last_refresh.elapsed().as_secs_f64().max(1.0);
 
-        match collectors::collect_snapshot(&mut self.sys, self.service_state_filter, 200) {
+        match collectors::collect_snapshot(
+            &mut self.sys,
+            self.provider.as_ref(),
+            self.service_state_filter,
+            200,
+        ) {
             Ok(mut snapshot) => {
                 snapshot.processes =
                     collectors::procs::collect_processes(&self.sys, 200, self.process_sort);
@@ -412,18 +421,22 @@ impl App {
                     };
 
                 self.networks.refresh(true);
-                let interface_addresses = collectors::netstat::collect_interface_addresses();
-                let interface_link_details = collectors::netstat::collect_interface_link_details();
+                let interface_addresses =
+                    collectors::netstat::collect_interface_addresses(self.provider.as_ref());
+                let interface_link_details =
+                    collectors::netstat::collect_interface_link_details(self.provider.as_ref());
                 self.interfaces = self.collect_interface_views(
                     &interface_addresses,
                     &interface_link_details,
                     elapsed,
                 );
-                self.connections = collectors::netstat::collect_connections(200);
+                self.connections =
+                    collectors::netstat::collect_connections(self.provider.as_ref(), 200);
                 let max_conn_scroll = self.filtered_connections().len().saturating_sub(1);
                 self.connection_scroll = self.connection_scroll.min(max_conn_scroll);
                 let (process_rows, process_counters) =
                     collectors::netstat::collect_process_bandwidth(
+                        self.provider.as_ref(),
                         &self.network_process_counters,
                         elapsed,
                         12,
@@ -434,7 +447,8 @@ impl App {
                     collectors::storage::collect_disk_io_rates(&self.disk_io_counters, elapsed);
                 self.disk_io_rows = io_rows;
                 self.disk_io_counters = io_counters;
-                self.smart_health_rows = collectors::storage::collect_smart_health(8);
+                self.smart_health_rows =
+                    collectors::storage::collect_smart_health(self.provider.as_ref(), 8);
                 self.push_histories(&snapshot, elapsed);
 
                 self.status_line = format!(
@@ -481,7 +495,7 @@ impl App {
         let id = snapshot.containers[index].id.clone();
         let name = snapshot.containers[index].name.clone();
 
-        match collectors::containers::act_on_container(&id, action) {
+        match collectors::containers::act_on_container(self.provider.as_ref(), &id, action) {
             Ok(_) => {
                 self.status_line = format!("{} sent to container {} ({})", action, name, id);
                 self.refresh();
@@ -505,7 +519,7 @@ impl App {
         let id = snapshot.containers[index].id.clone();
         self.container_logs_id = Some(id.clone());
 
-        match collectors::containers::get_container_logs(&id, 100) {
+        match collectors::containers::get_container_logs(self.provider.as_ref(), &id, 100) {
             Ok(logs) => {
                 self.container_logs = logs;
                 self.container_logs_error = None;
@@ -1125,15 +1139,15 @@ impl App {
         let pid = process.pid.clone();
         let signal = if force { "-KILL" } else { "-TERM" };
         let action = if force { "SIGKILL" } else { "SIGTERM" };
-        let output = ProcessCommand::new("kill").args([signal, &pid]).output();
+        let output = self.provider.run("kill", &[signal, &pid]);
 
         match output {
-            Ok(output) if output.status.success() => {
+            Ok(output) if output.success => {
                 self.status_line = format!("{action} sent to PID {pid}");
                 self.refresh();
             }
             Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stderr = output.stderr.trim().to_string();
                 self.status_line = if stderr.is_empty() {
                     format!("Failed to send {action} to PID {pid}")
                 } else {
@@ -1166,17 +1180,15 @@ impl App {
         }
 
         let pid = process.pid.clone();
-        let output = ProcessCommand::new("renice")
-            .args([nice.to_string(), "-p".into(), pid.clone()])
-            .output();
+        let output = self.provider.run("renice", &[&nice.to_string(), "-p", &pid]);
 
         match output {
-            Ok(output) if output.status.success() => {
+            Ok(output) if output.success => {
                 self.status_line = format!("Set PID {pid} nice to {nice}");
                 self.refresh();
             }
             Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stderr = output.stderr.trim().to_string();
                 self.status_line = if stderr.is_empty() {
                     format!("Renice failed for PID {pid}")
                 } else {
@@ -1218,17 +1230,17 @@ impl App {
         }
 
         let pid = process.pid.clone();
-        let output = ProcessCommand::new("taskset")
-            .args(["-cp", &core.to_string(), &pid])
-            .output();
+        let output = self
+            .provider
+            .run("taskset", &["-cp", &core.to_string(), &pid]);
 
         match output {
-            Ok(output) if output.status.success() => {
+            Ok(output) if output.success => {
                 self.status_line = format!("Pinned PID {pid} to CPU core {core}");
                 self.refresh();
             }
             Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stderr = output.stderr.trim().to_string();
                 self.status_line = if stderr.is_empty() {
                     format!("CPU pin failed for PID {pid}")
                 } else {
@@ -1325,7 +1337,7 @@ impl App {
             self.status_line = "No connection selected".into();
             return;
         };
-        match collectors::netstat::kill_connection(conn) {
+        match collectors::netstat::kill_connection(self.provider.as_ref(), conn) {
             Ok(msg) => {
                 self.status_line = msg;
                 self.refresh();
@@ -1341,7 +1353,7 @@ impl App {
             self.status_line = "No connection selected".into();
             return;
         };
-        match collectors::netstat::block_ip(&conn.remote_ip) {
+        match collectors::netstat::block_ip(self.provider.as_ref(), &conn.remote_ip) {
             Ok(msg) => {
                 self.status_line = msg;
                 self.refresh();
@@ -1364,28 +1376,28 @@ impl App {
         self.network_tool_output.push(String::new());
         self.network_tool_output.push("DNS".into());
         self.network_tool_output.extend(
-            collectors::netstat::run_dns_lookup(target, 6)
+            collectors::netstat::run_dns_lookup(self.provider.as_ref(), target, 6)
                 .into_iter()
                 .map(|line| format!("  {line}")),
         );
         self.network_tool_output.push(String::new());
         self.network_tool_output.push("Ping".into());
         self.network_tool_output.extend(
-            collectors::netstat::run_ping(target, 6)
+            collectors::netstat::run_ping(self.provider.as_ref(), target, 6)
                 .into_iter()
                 .map(|line| format!("  {line}")),
         );
         self.network_tool_output.push(String::new());
         self.network_tool_output.push("Traceroute".into());
         self.network_tool_output.extend(
-            collectors::netstat::run_traceroute(target, 6)
+            collectors::netstat::run_traceroute(self.provider.as_ref(), target, 6)
                 .into_iter()
                 .map(|line| format!("  {line}")),
         );
         self.network_tool_output.push(String::new());
         self.network_tool_output.push("HTTP probe".into());
         self.network_tool_output.extend(
-            collectors::netstat::run_http_probe(target, 4)
+            collectors::netstat::run_http_probe(self.provider.as_ref(), target, 4)
                 .into_iter()
                 .map(|line| format!("  {line}")),
         );
@@ -1416,7 +1428,7 @@ impl App {
             return;
         };
 
-        match collectors::systemd::collect_service_logs(&service, 8) {
+        match collectors::systemd::collect_service_logs(self.provider.as_ref(), &service, 8) {
             Ok(lines) => self.service_logs = lines,
             Err(error) => self.service_logs_error = Some(error.to_string()),
         }
@@ -1433,16 +1445,16 @@ impl App {
             return;
         };
 
-        match collectors::systemd::collect_service_failure_details(&service) {
+        match collectors::systemd::collect_service_failure_details(self.provider.as_ref(), &service) {
             Ok(details) => self.service_failure_details = Some(details),
             Err(error) => self.service_failure_error = Some(error.to_string()),
         }
     }
 
     pub(crate) fn refresh_logs_view(&mut self) {
-        self.logs_journal = collectors::logs::collect_journal_lines(200);
-        self.logs_syslog = collectors::logs::collect_syslog_lines(200);
-        self.logs_dmesg = collectors::logs::collect_dmesg_lines(200);
+        self.logs_journal = collectors::logs::collect_journal_lines(self.provider.as_ref(), 200);
+        self.logs_syslog = collectors::logs::collect_syslog_lines(self.provider.as_ref(), 200);
+        self.logs_dmesg = collectors::logs::collect_dmesg_lines(self.provider.as_ref(), 200);
         self.update_error_spike();
         if self.logs_autoscroll {
             self.logs_scroll = usize::MAX / 4;
@@ -1660,7 +1672,8 @@ impl App {
                 self.process_detail_error = Some(format!("Open files unavailable: {error}"));
             }
         }
-        self.process_open_ports = collectors::procs::collect_open_ports(pid, 8);
+        self.process_open_ports =
+            collectors::procs::collect_open_ports(self.provider.as_ref(), pid, 8);
 
         let details = collectors::procs::collect_process_details(pid, 3);
         self.process_cmdline = Some(details.cmdline);
@@ -1707,15 +1720,21 @@ impl App {
         self.disk_scan_started_at = Some(Instant::now());
 
         let depth = self.dir_scan_depth;
+        let provider = Arc::clone(&self.provider);
         let (sender, receiver) = mpsc::channel::<DiskScanEvent>();
         self.disk_scan_receiver = Some(receiver);
         self.status_line = format!("Starting async disk scan for {mount} (depth {depth})");
         thread::spawn(move || {
             let _ = sender.send(DiskScanEvent::Progress("scanning directories".into()));
-            let dir_rows =
-                collectors::storage::collect_directory_sizes_with_depth(&mount, depth, 12);
+            let dir_rows = collectors::storage::collect_directory_sizes_with_depth(
+                provider.as_ref(),
+                &mount,
+                depth,
+                12,
+            );
             let _ = sender.send(DiskScanEvent::Progress("scanning large files".into()));
-            let large_rows = collectors::storage::collect_large_files(&mount, 8);
+            let large_rows =
+                collectors::storage::collect_large_files(provider.as_ref(), &mount, 8);
             if dir_rows.is_empty() && large_rows.is_empty() {
                 let _ = sender.send(DiskScanEvent::Failed(format!(
                     "No explorer data for {mount}"
@@ -1808,7 +1827,7 @@ impl App {
             return;
         }
 
-        match collectors::systemd::run_systemctl(&[action, &service]) {
+        match collectors::systemd::run_systemctl(self.provider.as_ref(), &[action, &service]) {
             Ok(_) => {
                 self.status_line = format!("service {service}: {action} OK");
                 self.refresh();

@@ -1,5 +1,5 @@
 use crate::cli::{Command, ProcessSort, ServiceAction, ServiceState};
-use crate::collectors;
+use crate::collectors::{self, RealProvider};
 use anyhow::Result;
 use sysinfo::System;
 
@@ -19,7 +19,8 @@ pub fn execute(command: Command) -> Result<()> {
 fn print_summary() -> Result<()> {
     let mut sys = System::new_all();
     sys.refresh_all();
-    let snapshot = collectors::collect_snapshot(&mut sys, ServiceState::Running, 10)?;
+    let provider = RealProvider;
+    let snapshot = collectors::collect_snapshot(&mut sys, &provider, ServiceState::Running, 10)?;
 
     println!("System Summary");
     println!("==============");
@@ -72,7 +73,8 @@ fn print_summary() -> Result<()> {
 fn print_system() -> Result<()> {
     let mut system = System::new_all();
     system.refresh_all();
-    let hardware = collectors::host::collect_hardware_info();
+    let provider = RealProvider;
+    let hardware = collectors::host::collect_hardware_info(&provider);
 
     println!("System Information");
     println!("==================");
@@ -154,7 +156,8 @@ fn print_memory() -> Result<()> {
 }
 
 fn print_disks() -> Result<()> {
-    let disks = collectors::storage::collect_disks();
+    let provider = RealProvider;
+    let disks = collectors::storage::collect_disks(&provider);
     println!("Disks");
     println!("=====");
     println!(
@@ -202,7 +205,8 @@ fn print_processes(limit: usize, sort: ProcessSort) -> Result<()> {
 }
 
 fn print_services(state: ServiceState, limit: usize) -> Result<()> {
-    let services = collectors::systemd::collect_services(state, limit)?;
+    let provider = RealProvider;
+    let services = collectors::systemd::collect_services(&provider, state, limit)?;
 
     println!("Services");
     println!("========");
@@ -228,7 +232,8 @@ fn handle_service_action(name: &str, action: ServiceAction) -> Result<()> {
         ServiceAction::Restart => "restart",
     };
 
-    let output = collectors::systemd::run_systemctl(&[action_name, name])?;
+    let provider = RealProvider;
+    let output = collectors::systemd::run_systemctl(&provider, &[action_name, name])?;
     println!("{output}");
     Ok(())
 }

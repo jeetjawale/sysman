@@ -1,6 +1,6 @@
+use super::CommandProvider;
 use std::fs;
 use std::path::Path;
-use std::process::Command as ProcessCommand;
 use std::{cmp::Reverse, collections::HashMap};
 use sysinfo::System;
 
@@ -109,20 +109,20 @@ pub fn linux_cached_memory() -> Option<u64> {
     })
 }
 
-pub fn collect_hardware_info() -> HardwareInfo {
+pub fn collect_hardware_info(provider: &dyn CommandProvider) -> HardwareInfo {
     HardwareInfo {
         cpu_model: cpu_model().unwrap_or_else(|| "unknown".into()),
         cpu_arch: std::env::consts::ARCH.into(),
         cpu_cache: cpu_cache().unwrap_or_else(|| "unknown".into()),
-        temperatures: collect_temperatures(),
-        gpu_info: collect_gpu_info(),
+        temperatures: collect_temperatures(provider),
+        gpu_info: collect_gpu_info(provider),
         battery_info: collect_battery_info(),
-        login_users: collect_logged_in_users(),
-        login_history: collect_login_history(),
-        ssh_sessions: collect_ssh_sessions(),
-        failed_logins: collect_failed_logins(),
-        firewall_status: collect_firewall_status(),
-        security_modules: collect_security_modules(),
+        login_users: collect_logged_in_users(provider),
+        login_history: collect_login_history(provider),
+        ssh_sessions: collect_ssh_sessions(provider),
+        failed_logins: collect_failed_logins(provider),
+        firewall_status: collect_firewall_status(provider),
+        security_modules: collect_security_modules(provider),
     }
 }
 
@@ -143,9 +143,9 @@ pub fn collect_memory_runtime_info() -> MemoryRuntimeInfo {
     }
 }
 
-pub fn collect_gpu_runtime_info() -> GpuRuntimeInfo {
-    if command_exists("nvidia-smi")
-        && let Some((devices, processes)) = collect_nvidia_gpu_runtime()
+pub fn collect_gpu_runtime_info(provider: &dyn CommandProvider) -> GpuRuntimeInfo {
+    if command_exists(provider, "nvidia-smi")
+        && let Some((devices, processes)) = collect_nvidia_gpu_runtime(provider)
     {
         return GpuRuntimeInfo {
             backend: "nvidia-smi".into(),
@@ -154,8 +154,8 @@ pub fn collect_gpu_runtime_info() -> GpuRuntimeInfo {
         };
     }
 
-    if command_exists("rocm-smi")
-        && let Some(devices) = collect_rocm_gpu_runtime()
+    if command_exists(provider, "rocm-smi")
+        && let Some(devices) = collect_rocm_gpu_runtime(provider)
         && !devices.is_empty()
     {
         return GpuRuntimeInfo {
@@ -278,13 +278,13 @@ fn cpu_cache() -> Option<String> {
     })
 }
 
-fn collect_temperatures() -> Vec<String> {
+fn collect_temperatures(provider: &dyn CommandProvider) -> Vec<String> {
     let mut rows = Vec::new();
-    if command_exists("sensors")
-        && let Ok(output) = ProcessCommand::new("sensors").output()
-        && output.status.success()
+    if command_exists(provider, "sensors")
+        && let Ok(output) = provider.run("sensors", &[])
+        && output.success
     {
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
+        for line in output.stdout.lines() {
             let trimmed = line.trim();
             if trimmed.contains("°C") && !trimmed.is_empty() {
                 rows.push(trimmed.to_string());
@@ -326,18 +326,16 @@ fn collect_temperatures() -> Vec<String> {
     rows
 }
 
-fn collect_gpu_info() -> Vec<String> {
-    if command_exists("nvidia-smi")
-        && let Ok(output) = ProcessCommand::new("nvidia-smi")
-            .args([
+fn collect_gpu_info(provider: &dyn CommandProvider) -> Vec<String> {
+    if command_exists(provider, "nvidia-smi")
+        && let Ok(output) = provider.run("nvidia-smi", &[
                 "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw",
                 "--format=csv,noheader,nounits",
             ])
-            .output()
-        && output.status.success()
+        && output.success
     {
         let mut rows = Vec::new();
-        for line in String::from_utf8_lossy(&output.stdout).lines().take(4) {
+        for line in output.stdout.lines().take(4) {
             let cols: Vec<&str> = line.split(',').map(|part| part.trim()).collect();
             if cols.len() >= 6 {
                 rows.push(format!(
@@ -351,18 +349,16 @@ fn collect_gpu_info() -> Vec<String> {
         return rows;
     }
 
-    if command_exists("rocm-smi")
-        && let Ok(output) = ProcessCommand::new("rocm-smi")
-            .args([
+    if command_exists(provider, "rocm-smi")
+        && let Ok(output) = provider.run("rocm-smi", &[
                 "--showproductname",
                 "--showtemp",
                 "--showuse",
                 "--showpower",
             ])
-            .output()
-        && output.status.success()
+        && output.success
     {
-        return String::from_utf8_lossy(&output.stdout)
+        return output.stdout
             .lines()
             .filter(|line| line.contains("GPU") || line.contains("card"))
             .take(6)
@@ -370,11 +366,11 @@ fn collect_gpu_info() -> Vec<String> {
             .collect();
     }
 
-    if command_exists("lspci")
-        && let Ok(output) = ProcessCommand::new("lspci").output()
-        && output.status.success()
+    if command_exists(provider, "lspci")
+        && let Ok(output) = provider.run("lspci", &[])
+        && output.success
     {
-        let rows: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        let rows: Vec<String> = output.stdout
             .lines()
             .filter(|line| {
                 line.contains("VGA compatible controller") || line.contains("3D controller")
@@ -388,20 +384,18 @@ fn collect_gpu_info() -> Vec<String> {
     Vec::new()
 }
 
-fn collect_nvidia_gpu_runtime() -> Option<(Vec<GpuRuntimeDevice>, Vec<GpuProcessRow>)> {
-    let devices_output = ProcessCommand::new("nvidia-smi")
-        .args([
+fn collect_nvidia_gpu_runtime(provider: &dyn CommandProvider) -> Option<(Vec<GpuRuntimeDevice>, Vec<GpuProcessRow>)> {
+    let devices_output = provider.run("nvidia-smi", &[
             "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,fan.speed",
             "--format=csv,noheader,nounits",
         ])
-        .output()
         .ok()?;
-    if !devices_output.status.success() {
+    if !devices_output.success {
         return None;
     }
 
     let mut devices = Vec::new();
-    for line in String::from_utf8_lossy(&devices_output.stdout).lines() {
+    for line in devices_output.stdout.lines() {
         let cols: Vec<&str> = line.split(',').map(|part| part.trim()).collect();
         if cols.len() < 9 {
             continue;
@@ -427,18 +421,16 @@ fn collect_nvidia_gpu_runtime() -> Option<(Vec<GpuRuntimeDevice>, Vec<GpuProcess
         }
     }
 
-    let proc_output = ProcessCommand::new("nvidia-smi")
-        .args([
+    let proc_output = provider.run("nvidia-smi", &[
             "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
             "--format=csv,noheader,nounits",
         ])
-        .output()
         .ok();
     let mut processes = Vec::new();
     if let Some(output) = proc_output
-        && output.status.success()
+        && output.success
     {
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
+        for line in output.stdout.lines() {
             let cols: Vec<&str> = line.split(',').map(|part| part.trim()).collect();
             if cols.len() < 4 {
                 continue;
@@ -457,26 +449,24 @@ fn collect_nvidia_gpu_runtime() -> Option<(Vec<GpuRuntimeDevice>, Vec<GpuProcess
         }
     }
     if processes.is_empty() {
-        processes.extend(collect_nvidia_pmon_processes());
+        processes.extend(collect_nvidia_pmon_processes(provider));
     }
     processes.sort_by_key(|row| Reverse(row.used_memory_mib.unwrap_or(0)));
 
     Some((devices, processes))
 }
 
-fn collect_nvidia_pmon_processes() -> Vec<GpuProcessRow> {
-    let output = ProcessCommand::new("nvidia-smi")
-        .args(["pmon", "-c", "1"])
-        .output();
+fn collect_nvidia_pmon_processes(provider: &dyn CommandProvider) -> Vec<GpuProcessRow> {
+    let output = provider.run("nvidia-smi", &["pmon", "-c", "1"]);
     let Ok(output) = output else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return Vec::new();
     }
 
     let mut rows = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.stdout.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -550,34 +540,34 @@ fn collect_battery_info() -> Vec<String> {
     rows
 }
 
-fn collect_logged_in_users() -> Vec<String> {
-    if !command_exists("who") {
+fn collect_logged_in_users(provider: &dyn CommandProvider) -> Vec<String> {
+    if !command_exists(provider, "who") {
         return Vec::new();
     }
-    let Ok(output) = ProcessCommand::new("who").output() else {
+    let Ok(output) = provider.run("who", &[]) else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return Vec::new();
     }
-    String::from_utf8_lossy(&output.stdout)
+    output.stdout
         .lines()
         .take(6)
         .map(|line| line.trim().to_string())
         .collect()
 }
 
-fn collect_login_history() -> Vec<String> {
-    if !command_exists("last") {
+fn collect_login_history(provider: &dyn CommandProvider) -> Vec<String> {
+    if !command_exists(provider, "last") {
         return Vec::new();
     }
-    let Ok(output) = ProcessCommand::new("last").args(["-n", "6"]).output() else {
+    let Ok(output) = provider.run("last", &["-n", "6"]) else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return Vec::new();
     }
-    String::from_utf8_lossy(&output.stdout)
+    output.stdout
         .lines()
         .filter(|line| !line.trim().is_empty() && !line.contains("wtmp begins"))
         .take(6)
@@ -585,14 +575,14 @@ fn collect_login_history() -> Vec<String> {
         .collect()
 }
 
-fn collect_ssh_sessions() -> Vec<String> {
+fn collect_ssh_sessions(provider: &dyn CommandProvider) -> Vec<String> {
     let mut rows = Vec::new();
-    if command_exists("ss")
-        && let Ok(output) = ProcessCommand::new("ss").args(["-tnp"]).output()
-        && output.status.success()
+    if command_exists(provider, "ss")
+        && let Ok(output) = provider.run("ss", &["-tnp"])
+        && output.success
     {
         rows.extend(
-            String::from_utf8_lossy(&output.stdout)
+            output.stdout
                 .lines()
                 .filter(|line| line.contains("ESTAB") && line.contains(":22"))
                 .take(6)
@@ -601,12 +591,12 @@ fn collect_ssh_sessions() -> Vec<String> {
     }
 
     if rows.is_empty()
-        && command_exists("who")
-        && let Ok(output) = ProcessCommand::new("who").output()
-        && output.status.success()
+        && command_exists(provider, "who")
+        && let Ok(output) = provider.run("who", &[])
+        && output.success
     {
         rows.extend(
-            String::from_utf8_lossy(&output.stdout)
+            output.stdout
                 .lines()
                 .filter(|line| line.contains("pts/") && line.contains('('))
                 .take(6)
@@ -617,16 +607,14 @@ fn collect_ssh_sessions() -> Vec<String> {
     rows
 }
 
-fn collect_failed_logins() -> Vec<String> {
+fn collect_failed_logins(provider: &dyn CommandProvider) -> Vec<String> {
     let mut rows = Vec::new();
-    if command_exists("journalctl")
-        && let Ok(output) = ProcessCommand::new("journalctl")
-            .args(["-n", "250", "--no-pager", "--output=short"])
-            .output()
-        && output.status.success()
+    if command_exists(provider, "journalctl")
+        && let Ok(output) = provider.run("journalctl", &["-n", "250", "--no-pager", "--output=short"])
+        && output.success
     {
         rows.extend(
-            String::from_utf8_lossy(&output.stdout)
+            output.stdout
                 .lines()
                 .filter(|line| {
                     let lower = line.to_ascii_lowercase();
@@ -666,33 +654,31 @@ fn collect_failed_logins() -> Vec<String> {
     rows
 }
 
-fn collect_firewall_status() -> Vec<String> {
-    if command_exists("ufw")
-        && let Ok(output) = ProcessCommand::new("ufw").arg("status").output()
-        && output.status.success()
+fn collect_firewall_status(provider: &dyn CommandProvider) -> Vec<String> {
+    if command_exists(provider, "ufw")
+        && let Ok(output) = provider.run("ufw", &["status"])
+        && output.success
     {
-        return String::from_utf8_lossy(&output.stdout)
+        return output.stdout
             .lines()
             .take(4)
             .map(|line| line.trim().to_string())
             .collect();
     }
 
-    if command_exists("firewall-cmd")
-        && let Ok(state) = ProcessCommand::new("firewall-cmd").arg("--state").output()
-        && state.status.success()
+    if command_exists(provider, "firewall-cmd")
+        && let Ok(state) = provider.run("firewall-cmd", &["--state"])
+        && state.success
     {
         let mut rows = vec![format!(
             "firewalld: {}",
-            String::from_utf8_lossy(&state.stdout).trim()
+            state.stdout.trim()
         )];
-        if let Ok(zones) = ProcessCommand::new("firewall-cmd")
-            .args(["--get-active-zones"])
-            .output()
-            && zones.status.success()
+        if let Ok(zones) = provider.run("firewall-cmd", &["--get-active-zones"])
+            && zones.success
         {
             rows.extend(
-                String::from_utf8_lossy(&zones.stdout)
+                zones.stdout
                     .lines()
                     .take(3)
                     .map(|line| line.trim().to_string()),
@@ -701,13 +687,11 @@ fn collect_firewall_status() -> Vec<String> {
         return rows;
     }
 
-    if command_exists("iptables")
-        && let Ok(output) = ProcessCommand::new("iptables")
-            .args(["-L", "INPUT", "-n"])
-            .output()
-        && output.status.success()
+    if command_exists(provider, "iptables")
+        && let Ok(output) = provider.run("iptables", &["-L", "INPUT", "-n"])
+        && output.success
     {
-        return String::from_utf8_lossy(&output.stdout)
+        return output.stdout
             .lines()
             .take(4)
             .map(|line| line.trim().to_string())
@@ -717,7 +701,7 @@ fn collect_firewall_status() -> Vec<String> {
     Vec::new()
 }
 
-fn collect_security_modules() -> Vec<String> {
+fn collect_security_modules(provider: &dyn CommandProvider) -> Vec<String> {
     let mut rows = Vec::new();
 
     let selinux = if let Ok(value) = fs::read_to_string("/sys/fs/selinux/enforce") {
@@ -727,15 +711,14 @@ fn collect_security_modules() -> Vec<String> {
             "permissive"
         };
         Some(format!("SELinux: {mode}"))
-    } else if command_exists("getenforce") {
-        ProcessCommand::new("getenforce")
-            .output()
+    } else if command_exists(provider, "getenforce") {
+        provider.run("getenforce", &[])
             .ok()
-            .filter(|output| output.status.success())
+            .filter(|output| output.success)
             .map(|output| {
                 format!(
                     "SELinux: {}",
-                    String::from_utf8_lossy(&output.stdout).trim()
+                    output.stdout.trim()
                 )
             })
     } else {
@@ -754,13 +737,12 @@ fn collect_security_modules() -> Vec<String> {
         } else {
             "AppArmor: disabled".into()
         }
-    } else if command_exists("aa-status") {
-        ProcessCommand::new("aa-status")
-            .output()
+    } else if command_exists(provider, "aa-status") {
+        provider.run("aa-status", &[])
             .ok()
-            .filter(|output| output.status.success())
+            .filter(|output| output.success)
             .and_then(|output| {
-                String::from_utf8_lossy(&output.stdout)
+                output.stdout
                     .lines()
                     .find(|line| line.contains("profiles are loaded"))
                     .map(|line| format!("AppArmor: {}", line.trim()))
@@ -774,11 +756,8 @@ fn collect_security_modules() -> Vec<String> {
     rows
 }
 
-fn command_exists(binary: &str) -> bool {
-    ProcessCommand::new("which")
-        .arg(binary)
-        .output()
-        .is_ok_and(|output| output.status.success())
+fn command_exists(provider: &dyn CommandProvider, binary: &str) -> bool {
+    provider.run("which", &[binary]).is_ok_and(|output| output.success)
 }
 
 fn read_memory_pressure() -> Option<MemoryPressureInfo> {
@@ -890,13 +869,13 @@ fn parse_optional_f64(value: &str) -> Option<f64> {
 ///
 /// Attempts JSON mode first (ROCm 5+), falls back to individual `--show*` flags.
 /// Returns `None` only when rocm-smi produces no usable output at all.
-fn collect_rocm_gpu_runtime() -> Option<Vec<GpuRuntimeDevice>> {
+fn collect_rocm_gpu_runtime(provider: &dyn CommandProvider) -> Option<Vec<GpuRuntimeDevice>> {
     // --- Strategy 1: rocm-smi --json (ROCm ≥ 5.0) ---
-    if let Some(devices) = collect_rocm_json() {
+    if let Some(devices) = collect_rocm_json(provider) {
         return Some(devices);
     }
     // --- Strategy 2: rocm-smi individual flags (older ROCm / plain text) ---
-    collect_rocm_plain_text()
+    collect_rocm_plain_text(provider)
 }
 
 /// Parse `rocm-smi --json` output.
@@ -916,9 +895,8 @@ fn collect_rocm_gpu_runtime() -> Option<Vec<GpuRuntimeDevice>> {
 ///   "card1": { ... }
 /// }
 /// ```
-fn collect_rocm_json() -> Option<Vec<GpuRuntimeDevice>> {
-    let output = ProcessCommand::new("rocm-smi")
-        .args([
+fn collect_rocm_json(provider: &dyn CommandProvider) -> Option<Vec<GpuRuntimeDevice>> {
+    let output = provider.run("rocm-smi", &[
             "--showproductname",
             "--showuse",
             "--showtemp",
@@ -928,15 +906,14 @@ fn collect_rocm_json() -> Option<Vec<GpuRuntimeDevice>> {
             "--showfan",
             "--json",
         ])
-        .output()
         .ok()?;
-    if !output.status.success() {
+    if !output.success {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = &output.stdout;
     // Minimal JSON parser — avoids adding a `serde_json` dependency.
     // We only need to extract string values from a flat two-level object.
-    rocm_parse_json(&text)
+    rocm_parse_json(text)
 }
 
 /// Parse the two-level `{"cardN": {"key": "value", ...}}` JSON that rocm-smi emits.
@@ -1065,22 +1042,20 @@ fn find_matching_brace(text: &str) -> Option<usize> {
 /// GPU  Temp   AvgPwr  SCLK     MCLK     Fan     Perf  PwrCap  VRAM%  GPU%
 /// 0    67.0c  210.0W  1900Mhz  1249Mhz  55.0%   auto  300.0W  16%    42%
 /// ```
-fn collect_rocm_plain_text() -> Option<Vec<GpuRuntimeDevice>> {
+fn collect_rocm_plain_text(provider: &dyn CommandProvider) -> Option<Vec<GpuRuntimeDevice>> {
     // Use the concise output (always available, no flags needed in old versions)
-    let output = ProcessCommand::new("rocm-smi")
-        .args([
+    let output = provider.run("rocm-smi", &[
             "--showproductname",
             "--showuse",
             "--showtemp",
             "--showpower",
             "--showfan",
         ])
-        .output()
         .ok()?;
-    if !output.status.success() {
+    if !output.success {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = &output.stdout;
     let mut gpu_blocks: HashMap<u32, Vec<(String, String)>> = HashMap::new();
 
     for line in text.lines() {
@@ -1106,7 +1081,7 @@ fn collect_rocm_plain_text() -> Option<Vec<GpuRuntimeDevice>> {
 
     if gpu_blocks.is_empty() {
         // Last resort: try the concise table format
-        return collect_rocm_concise(&text);
+        return collect_rocm_concise(provider, text);
     }
 
     let mut devices: Vec<GpuRuntimeDevice> = gpu_blocks
@@ -1153,7 +1128,7 @@ fn collect_rocm_plain_text() -> Option<Vec<GpuRuntimeDevice>> {
 /// GPU  Temp   AvgPwr  SCLK  MCLK  Fan   Perf  PwrCap  VRAM%  GPU%
 /// 0    67.0c  210W    ...   ...   55%   auto  300W    16%    42%
 /// ```
-fn collect_rocm_concise(text: &str) -> Option<Vec<GpuRuntimeDevice>> {
+fn collect_rocm_concise(_provider: &dyn CommandProvider, text: &str) -> Option<Vec<GpuRuntimeDevice>> {
     let mut header_line: Option<Vec<&str>> = None;
     let mut devices = Vec::new();
 

@@ -60,7 +60,7 @@ pub fn collect_snapshot(
     sys.refresh_processes(ProcessesToUpdate::All, true);
     sys.refresh_cpu_usage();
 
-    let disks = storage::collect_disks();
+    let disks = storage::collect_disks(provider);
     let processes = procs::collect_processes(sys, process_limit, ProcessSort::Cpu);
     let services = systemd::collect_services(provider, service_state, 50).unwrap_or_default();
     let service_summary = if cfg!(target_os = "linux") {
@@ -94,9 +94,9 @@ pub fn collect_snapshot(
         load_average: format!("{:.2} / {:.2} / {:.2}", load.one, load.five, load.fifteen),
         cpu_per_core: sys.cpus().iter().map(|cpu| cpu.cpu_usage()).collect(),
         cpu_runtime: host::collect_cpu_runtime_info(),
-        gpu_runtime: host::collect_gpu_runtime_info(),
+        gpu_runtime: host::collect_gpu_runtime_info(provider),
         memory_runtime: host::collect_memory_runtime_info(),
-        hardware: host::collect_hardware_info(),
+        hardware: host::collect_hardware_info(provider),
         disks,
         processes,
         services,

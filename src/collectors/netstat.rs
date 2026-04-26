@@ -1,6 +1,6 @@
+use super::CommandProvider;
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::process::Command as ProcessCommand;
 
 /// A single network connection row for display.
 #[derive(Debug, Clone)]
@@ -33,20 +33,21 @@ pub struct InterfaceLinkDetails {
 }
 
 /// Collect active TCP/UDP connections via `ss`.
-pub fn collect_connections(limit: usize) -> Vec<ConnectionRow> {
+pub fn collect_connections(provider: &dyn CommandProvider, limit: usize) -> Vec<ConnectionRow> {
     if !cfg!(target_os = "linux") {
         return Vec::new();
     }
 
-    let output = ProcessCommand::new("ss").args(["-tunapH"]).output();
+    let output = provider.run("ss", &["-tunapH"]);
     let Ok(output) = output else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return Vec::new();
     }
 
-    String::from_utf8_lossy(&output.stdout)
+    output
+        .stdout
         .lines()
         .filter_map(parse_connection_line)
         .take(limit)
@@ -54,6 +55,7 @@ pub fn collect_connections(limit: usize) -> Vec<ConnectionRow> {
 }
 
 pub fn collect_process_bandwidth(
+    provider: &dyn CommandProvider,
     previous: &HashMap<u32, (u64, u64)>,
     elapsed_secs: f64,
     limit: usize,
@@ -62,11 +64,11 @@ pub fn collect_process_bandwidth(
         return (Vec::new(), previous.clone());
     }
 
-    let output = ProcessCommand::new("ss").args(["-tinapH"]).output();
+    let output = provider.run("ss", &["-tinapH"]);
     let Ok(output) = output else {
         return (Vec::new(), previous.clone());
     };
-    if !output.status.success() {
+    if !output.success {
         return (Vec::new(), previous.clone());
     }
 
@@ -75,7 +77,7 @@ pub fn collect_process_bandwidth(
     let mut connection_counts: HashMap<u32, usize> = HashMap::new();
     let mut pending_pid: Option<u32> = None;
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.stdout.lines() {
         if line.starts_with(' ') || line.starts_with('\t') {
             if let Some(pid) = pending_pid {
                 let sent = parse_counter(line, "bytes_sent:");
@@ -128,23 +130,21 @@ pub fn collect_process_bandwidth(
 }
 
 /// Collect interface → IP address mappings via `ip addr show`.
-pub fn collect_interface_addresses() -> BTreeMap<String, Vec<String>> {
+pub fn collect_interface_addresses(provider: &dyn CommandProvider) -> BTreeMap<String, Vec<String>> {
     if !cfg!(target_os = "linux") {
         return BTreeMap::new();
     }
 
-    let output = ProcessCommand::new("ip")
-        .args(["-o", "addr", "show"])
-        .output();
+    let output = provider.run("ip", &["-o", "addr", "show"]);
     let Ok(output) = output else {
         return BTreeMap::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return BTreeMap::new();
     }
 
     let mut interfaces: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.stdout.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
         if cols.len() < 4 {
             continue;
@@ -167,23 +167,23 @@ pub fn collect_interface_addresses() -> BTreeMap<String, Vec<String>> {
     interfaces
 }
 
-pub fn collect_interface_link_details() -> BTreeMap<String, InterfaceLinkDetails> {
+pub fn collect_interface_link_details(
+    provider: &dyn CommandProvider,
+) -> BTreeMap<String, InterfaceLinkDetails> {
     if !cfg!(target_os = "linux") {
         return BTreeMap::new();
     }
 
-    let output = ProcessCommand::new("ip")
-        .args(["-o", "link", "show"])
-        .output();
+    let output = provider.run("ip", &["-o", "link", "show"]);
     let Ok(output) = output else {
         return BTreeMap::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return BTreeMap::new();
     }
 
     let mut details = BTreeMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.stdout.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
         if cols.len() < 4 {
             continue;
@@ -237,7 +237,7 @@ fn parse_connection_line(line: &str) -> Option<ConnectionRow> {
     })
 }
 
-pub fn kill_connection(conn: &ConnectionRow) -> Result<String, String> {
+pub fn kill_connection(provider: &dyn CommandProvider, conn: &ConnectionRow) -> Result<String, String> {
     if !cfg!(target_os = "linux") {
         return Err("connection actions are currently supported on Linux hosts only".into());
     }
@@ -247,18 +247,19 @@ pub fn kill_connection(conn: &ConnectionRow) -> Result<String, String> {
         && conn.remote_ip != "-"
         && let Some(port) = conn.remote_port
     {
-        let kill_output = ProcessCommand::new("ss")
-            .args([
+        let kill_output = provider.run(
+            "ss",
+            &[
                 "-K",
                 "dst",
                 &conn.remote_ip,
                 "dport",
                 "=",
                 &port.to_string(),
-            ])
-            .output();
+            ],
+        );
         if let Ok(output) = kill_output
-            && output.status.success()
+            && output.success
         {
             return Ok(format!("Killed TCP flow to {}:{port}", conn.remote_ip));
         }
@@ -267,14 +268,13 @@ pub fn kill_connection(conn: &ConnectionRow) -> Result<String, String> {
     let Some(pid) = conn.pid else {
         return Err("No owning PID found for selected connection".into());
     };
-    let output = ProcessCommand::new("kill")
-        .args(["-KILL", &pid.to_string()])
-        .output()
+    let output = provider
+        .run("kill", &["-KILL", &pid.to_string()])
         .map_err(|error| error.to_string())?;
-    if output.status.success() {
+    if output.success {
         Ok(format!("Killed connection owner PID {pid}"))
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         Err(if stderr.is_empty() {
             format!("Failed to kill PID {pid}")
         } else {
@@ -283,7 +283,7 @@ pub fn kill_connection(conn: &ConnectionRow) -> Result<String, String> {
     }
 }
 
-pub fn block_ip(ip: &str) -> Result<String, String> {
+pub fn block_ip(provider: &dyn CommandProvider, ip: &str) -> Result<String, String> {
     if !cfg!(target_os = "linux") {
         return Err("IP blocking is currently supported on Linux hosts only".into());
     }
@@ -291,15 +291,14 @@ pub fn block_ip(ip: &str) -> Result<String, String> {
         return Err("No remote IP found for selected connection".into());
     }
 
-    if command_exists("ufw") {
-        let output = ProcessCommand::new("ufw")
-            .args(["--force", "deny", "from", ip])
-            .output()
+    if command_exists(provider, "ufw") {
+        let output = provider
+            .run("ufw", &["--force", "deny", "from", ip])
             .map_err(|error| error.to_string())?;
-        if output.status.success() {
+        if output.success {
             return Ok(format!("Blocked {ip} via ufw deny"));
         }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         return Err(if stderr.is_empty() {
             format!("ufw deny failed for {ip}")
         } else {
@@ -307,26 +306,24 @@ pub fn block_ip(ip: &str) -> Result<String, String> {
         });
     }
 
-    let input = ProcessCommand::new("iptables")
-        .args(["-I", "INPUT", "-s", ip, "-j", "DROP"])
-        .output()
+    let input = provider
+        .run("iptables", &["-I", "INPUT", "-s", ip, "-j", "DROP"])
         .map_err(|error| error.to_string())?;
-    if !input.status.success() {
-        let stderr = String::from_utf8_lossy(&input.stderr).trim().to_string();
+    if !input.success {
+        let stderr = input.stderr.trim().to_string();
         return Err(if stderr.is_empty() {
             format!("iptables INPUT rule failed for {ip}")
         } else {
             format!("iptables INPUT rule failed for {ip}: {stderr}")
         });
     }
-    let output = ProcessCommand::new("iptables")
-        .args(["-I", "OUTPUT", "-d", ip, "-j", "DROP"])
-        .output()
+    let output = provider
+        .run("iptables", &["-I", "OUTPUT", "-d", ip, "-j", "DROP"])
         .map_err(|error| error.to_string())?;
-    if output.status.success() {
+    if output.success {
         Ok(format!("Blocked {ip} via iptables"))
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         Err(if stderr.is_empty() {
             format!("iptables OUTPUT rule failed for {ip}")
         } else {
@@ -335,61 +332,60 @@ pub fn block_ip(ip: &str) -> Result<String, String> {
     }
 }
 
-pub fn run_dns_lookup(target: &str, limit: usize) -> Vec<String> {
+pub fn run_dns_lookup(provider: &dyn CommandProvider, target: &str, limit: usize) -> Vec<String> {
     if target.trim().is_empty() {
         return vec!["Empty lookup target".into()];
     }
-    let getent = ProcessCommand::new("getent")
-        .args(["ahosts", target])
-        .output();
+    let getent = provider.run("getent", &["ahosts", target]);
     if let Ok(output) = getent
-        && output.status.success()
+        && output.success
     {
-        return String::from_utf8_lossy(&output.stdout)
+        return output
+            .stdout
             .lines()
             .take(limit)
             .map(|line| line.to_string())
             .collect();
     }
 
-    let nslookup = ProcessCommand::new("nslookup").arg(target).output();
+    let nslookup = provider.run("nslookup", &[target]);
     let Ok(output) = nslookup else {
         return vec!["DNS lookup command unavailable".into()];
     };
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.success {
+        let stderr = output.stderr.trim().to_string();
         return vec![if stderr.is_empty() {
             "DNS lookup failed".into()
         } else {
             format!("DNS lookup failed: {stderr}")
         }];
     }
-    String::from_utf8_lossy(&output.stdout)
+    output
+        .stdout
         .lines()
         .take(limit)
         .map(|line| line.to_string())
         .collect()
 }
 
-pub fn run_ping(target: &str, limit: usize) -> Vec<String> {
+pub fn run_ping(provider: &dyn CommandProvider, target: &str, limit: usize) -> Vec<String> {
     if target.trim().is_empty() {
         return vec!["Empty ping target".into()];
     }
-    let output = ProcessCommand::new("ping")
-        .args(["-c", "2", "-W", "1", target])
-        .output();
+    let output = provider.run("ping", &["-c", "2", "-W", "1", target]);
     let Ok(output) = output else {
         return vec!["Ping command unavailable".into()];
     };
 
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
+    if output.success {
+        output
+            .stdout
             .lines()
             .take(limit)
             .map(|line| line.to_string())
             .collect()
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         vec![if stderr.is_empty() {
             "Ping failed".into()
         } else {
@@ -398,38 +394,36 @@ pub fn run_ping(target: &str, limit: usize) -> Vec<String> {
     }
 }
 
-pub fn run_traceroute(target: &str, limit: usize) -> Vec<String> {
+pub fn run_traceroute(provider: &dyn CommandProvider, target: &str, limit: usize) -> Vec<String> {
     if target.trim().is_empty() {
         return vec!["Empty traceroute target".into()];
     }
 
-    let tracepath = ProcessCommand::new("tracepath")
-        .args(["-n", target])
-        .output();
+    let tracepath = provider.run("tracepath", &["-n", target]);
     if let Ok(output) = tracepath
-        && output.status.success()
+        && output.success
     {
-        return String::from_utf8_lossy(&output.stdout)
+        return output
+            .stdout
             .lines()
             .take(limit)
             .map(|line| line.to_string())
             .collect();
     }
 
-    let traceroute = ProcessCommand::new("traceroute")
-        .args(["-n", "-m", "6", target])
-        .output();
+    let traceroute = provider.run("traceroute", &["-n", "-m", "6", target]);
     let Ok(output) = traceroute else {
         return vec!["Traceroute command unavailable".into()];
     };
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
+    if output.success {
+        output
+            .stdout
             .lines()
             .take(limit)
             .map(|line| line.to_string())
             .collect()
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         vec![if stderr.is_empty() {
             "Traceroute failed".into()
         } else {
@@ -438,7 +432,7 @@ pub fn run_traceroute(target: &str, limit: usize) -> Vec<String> {
     }
 }
 
-pub fn run_http_probe(target: &str, limit: usize) -> Vec<String> {
+pub fn run_http_probe(provider: &dyn CommandProvider, target: &str, limit: usize) -> Vec<String> {
     if target.trim().is_empty() {
         return vec!["Empty HTTP probe target".into()];
     }
@@ -448,8 +442,9 @@ pub fn run_http_probe(target: &str, limit: usize) -> Vec<String> {
         host = format!("http://{host}");
     }
 
-    let output = ProcessCommand::new("curl")
-        .args([
+    let output = provider.run(
+        "curl",
+        &[
             "-sS",
             "-o",
             "/dev/null",
@@ -459,19 +454,20 @@ pub fn run_http_probe(target: &str, limit: usize) -> Vec<String> {
             "-w",
             "code=%{http_code} ip=%{remote_ip} connect=%{time_connect}s total=%{time_total}s",
             &host,
-        ])
-        .output();
+        ],
+    );
     let Ok(output) = output else {
         return vec!["HTTP probe command unavailable (curl)".into()];
     };
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
+    if output.success {
+        output
+            .stdout
             .lines()
             .take(limit)
             .map(|line| line.to_string())
             .collect()
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = output.stderr.trim().to_string();
         vec![if stderr.is_empty() {
             "HTTP probe failed".into()
         } else {
@@ -563,9 +559,8 @@ fn parse_counter(line: &str, marker: &str) -> Option<u64> {
         .and_then(|value| value.parse::<u64>().ok())
 }
 
-fn command_exists(bin: &str) -> bool {
-    ProcessCommand::new("which")
-        .arg(bin)
-        .output()
-        .is_ok_and(|output| output.status.success())
+fn command_exists(provider: &dyn CommandProvider, bin: &str) -> bool {
+    provider
+        .run("which", &[bin])
+        .is_ok_and(|output| output.success)
 }

@@ -1,6 +1,6 @@
+use super::provider::CommandProvider;
 use std::collections::HashMap;
 use std::fs;
-use std::process::Command as ProcessCommand;
 use sysinfo::Disks;
 
 /// A single disk/partition row for display.
@@ -34,9 +34,9 @@ pub struct SmartHealthRow {
 pub type DiskIoCounters = HashMap<String, (u64, u64)>;
 
 /// Collect all mounted disk partitions.
-pub fn collect_disks() -> Vec<DiskRow> {
+pub fn collect_disks(provider: &dyn CommandProvider) -> Vec<DiskRow> {
     let disks = Disks::new_with_refreshed_list();
-    let inode_map = collect_inode_usage_map();
+    let inode_map = collect_inode_usage_map(provider);
     disks
         .list()
         .iter()
@@ -59,21 +59,20 @@ pub fn collect_disks() -> Vec<DiskRow> {
         .collect()
 }
 
-fn collect_inode_usage_map() -> HashMap<String, (u64, u64, f64)> {
+fn collect_inode_usage_map(provider: &dyn CommandProvider) -> HashMap<String, (u64, u64, f64)> {
     if !cfg!(target_os = "linux") {
         return HashMap::new();
     }
 
-    let output = ProcessCommand::new("df").args(["-Pi"]).output();
-    let Ok(output) = output else {
+    let Ok(output) = provider.run("df", &["-Pi"]) else {
         return HashMap::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return HashMap::new();
     }
 
     let mut map = HashMap::new();
-    for (index, line) in String::from_utf8_lossy(&output.stdout).lines().enumerate() {
+    for (index, line) in output.stdout.lines().enumerate() {
         if index == 0 {
             continue;
         }
@@ -152,22 +151,20 @@ fn is_partition_name(name: &str) -> bool {
 }
 
 pub fn collect_directory_sizes_with_depth(
+    provider: &dyn CommandProvider,
     path: &str,
     depth: usize,
     limit: usize,
 ) -> Vec<(String, u64)> {
-    let output = ProcessCommand::new("du")
-        .args(["-xb", &format!("--max-depth={depth}"), path])
-        .output();
-    let Ok(output) = output else {
+    let Ok(output) = provider.run("du", &["-xb", &format!("--max-depth={depth}"), path]) else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return Vec::new();
     }
 
     let mut rows = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.stdout.lines() {
         let Some((size_str, dir)) = line.split_once('\t') else {
             continue;
         };
@@ -181,26 +178,29 @@ pub fn collect_directory_sizes_with_depth(
     rows.into_iter().take(limit).collect()
 }
 
-pub fn collect_large_files(path: &str, limit: usize) -> Vec<(String, u64)> {
-    let output = ProcessCommand::new("sh")
-        .args([
+pub fn collect_large_files(
+    provider: &dyn CommandProvider,
+    path: &str,
+    limit: usize,
+) -> Vec<(String, u64)> {
+    let Ok(output) = provider.run(
+        "sh",
+        &[
             "-c",
             "find \"$1\" -xdev -type f -printf '%s\\t%p\\n' 2>/dev/null | sort -nr | head -n \"$2\"",
             "--", // $0
             path, // $1
             &limit.to_string(), // $2
-        ])
-        .output();
-
-    let Ok(output) = output else {
+        ],
+    ) else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return Vec::new();
     }
 
     let mut rows = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.stdout.lines() {
         let Some((size_str, file)) = line.split_once('\t') else {
             continue;
         };
@@ -211,40 +211,33 @@ pub fn collect_large_files(path: &str, limit: usize) -> Vec<(String, u64)> {
     rows
 }
 
-pub fn collect_smart_health(limit: usize) -> Vec<SmartHealthRow> {
+pub fn collect_smart_health(provider: &dyn CommandProvider, limit: usize) -> Vec<SmartHealthRow> {
     if !cfg!(target_os = "linux") {
         return Vec::new();
     }
-    if !command_exists("smartctl") {
+    if !command_exists(provider, "smartctl") {
         return Vec::new();
     }
 
-    let scan = ProcessCommand::new("smartctl")
-        .args(["--scan-open"])
-        .output();
-    let Ok(scan) = scan else {
+    let Ok(scan) = provider.run("smartctl", &["--scan-open"]) else {
         return Vec::new();
     };
-    if !scan.status.success() {
+    if !scan.success {
         return Vec::new();
     }
 
     let mut rows = Vec::new();
-    for line in String::from_utf8_lossy(&scan.stdout).lines().take(limit) {
+    for line in scan.stdout.lines().take(limit) {
         let device = line.split_whitespace().next().unwrap_or("");
         if device.is_empty() {
             continue;
         }
-        rows.push(read_single_smart_health(device));
+        rows.push(read_single_smart_health(provider, device));
     }
     rows
 }
 
-fn read_single_smart_health(device: &str) -> SmartHealthRow {
-    let output = ProcessCommand::new("smartctl")
-        .args(["-H", "-A", device])
-        .output();
-
+fn read_single_smart_health(provider: &dyn CommandProvider, device: &str) -> SmartHealthRow {
     let mut row = SmartHealthRow {
         device: device.to_string(),
         overall: "unknown".into(),
@@ -252,15 +245,12 @@ fn read_single_smart_health(device: &str) -> SmartHealthRow {
         power_on_hours: None,
     };
 
-    let Ok(output) = output else {
+    let Ok(output) = provider.run("smartctl", &["-H", "-A", device]) else {
         row.overall = "unavailable".into();
         return row;
     };
-    let text = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+
+    let text = format!("{}\n{}", output.stdout, output.stderr);
 
     for line in text.lines() {
         let lower = line.to_ascii_lowercase();
@@ -290,7 +280,7 @@ fn read_single_smart_health(device: &str) -> SmartHealthRow {
     }
 
     if row.overall == "unknown" {
-        row.overall = if output.status.success() {
+        row.overall = if output.success {
             "available".into()
         } else {
             "failed".into()
@@ -299,9 +289,9 @@ fn read_single_smart_health(device: &str) -> SmartHealthRow {
     row
 }
 
-fn command_exists(binary: &str) -> bool {
-    ProcessCommand::new("which")
-        .arg(binary)
-        .output()
-        .is_ok_and(|output| output.status.success())
+fn command_exists(provider: &dyn CommandProvider, binary: &str) -> bool {
+    provider
+        .run("which", &[binary])
+        .is_ok_and(|output| output.success)
 }
+

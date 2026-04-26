@@ -1,8 +1,8 @@
 use crate::cli::ProcessSort;
+use super::CommandProvider;
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::fs;
-use std::process::Command as ProcessCommand;
 use sysinfo::System;
 
 /// A single process row for display.
@@ -85,18 +85,18 @@ pub fn collect_open_files(pid: u32, limit: usize) -> Result<Vec<String>, String>
     Ok(set.into_iter().take(limit).collect())
 }
 
-pub fn collect_open_ports(pid: u32, limit: usize) -> Vec<String> {
-    let output = ProcessCommand::new("ss").args(["-tunapH"]).output();
+pub fn collect_open_ports(provider: &dyn CommandProvider, pid: u32, limit: usize) -> Vec<String> {
+    let output = provider.run("ss", &["-tunapH"]);
     let Ok(output) = output else {
         return Vec::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return Vec::new();
     }
 
     let needle = format!("pid={pid},");
     let mut rows = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.stdout.lines() {
         if !line.contains(&needle) {
             continue;
         }
