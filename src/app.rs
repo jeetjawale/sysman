@@ -20,7 +20,6 @@ use ratatui::{
 use regex::Regex;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
-use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -1180,7 +1179,9 @@ impl App {
         }
 
         let pid = process.pid.clone();
-        let output = self.provider.run("renice", &[&nice.to_string(), "-p", &pid]);
+        let output = self
+            .provider
+            .run("renice", &[&nice.to_string(), "-p", &pid]);
 
         match output {
             Ok(output) if output.success => {
@@ -1445,7 +1446,8 @@ impl App {
             return;
         };
 
-        match collectors::systemd::collect_service_failure_details(self.provider.as_ref(), &service) {
+        match collectors::systemd::collect_service_failure_details(self.provider.as_ref(), &service)
+        {
             Ok(details) => self.service_failure_details = Some(details),
             Err(error) => self.service_failure_error = Some(error.to_string()),
         }
@@ -1733,8 +1735,7 @@ impl App {
                 12,
             );
             let _ = sender.send(DiskScanEvent::Progress("scanning large files".into()));
-            let large_rows =
-                collectors::storage::collect_large_files(provider.as_ref(), &mount, 8);
+            let large_rows = collectors::storage::collect_large_files(provider.as_ref(), &mount, 8);
             if dir_rows.is_empty() && large_rows.is_empty() {
                 let _ = sender.send(DiskScanEvent::Failed(format!(
                     "No explorer data for {mount}"

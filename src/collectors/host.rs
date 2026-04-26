@@ -350,15 +350,19 @@ fn collect_gpu_info(provider: &dyn CommandProvider) -> Vec<String> {
     }
 
     if command_exists(provider, "rocm-smi")
-        && let Ok(output) = provider.run("rocm-smi", &[
+        && let Ok(output) = provider.run(
+            "rocm-smi",
+            &[
                 "--showproductname",
                 "--showtemp",
                 "--showuse",
                 "--showpower",
-            ])
+            ],
+        )
         && output.success
     {
-        return output.stdout
+        return output
+            .stdout
             .lines()
             .filter(|line| line.contains("GPU") || line.contains("card"))
             .take(6)
@@ -370,7 +374,8 @@ fn collect_gpu_info(provider: &dyn CommandProvider) -> Vec<String> {
         && let Ok(output) = provider.run("lspci", &[])
         && output.success
     {
-        let rows: Vec<String> = output.stdout
+        let rows: Vec<String> = output
+            .stdout
             .lines()
             .filter(|line| {
                 line.contains("VGA compatible controller") || line.contains("3D controller")
@@ -384,7 +389,9 @@ fn collect_gpu_info(provider: &dyn CommandProvider) -> Vec<String> {
     Vec::new()
 }
 
-fn collect_nvidia_gpu_runtime(provider: &dyn CommandProvider) -> Option<(Vec<GpuRuntimeDevice>, Vec<GpuProcessRow>)> {
+fn collect_nvidia_gpu_runtime(
+    provider: &dyn CommandProvider,
+) -> Option<(Vec<GpuRuntimeDevice>, Vec<GpuProcessRow>)> {
     let devices_output = provider.run("nvidia-smi", &[
             "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,fan.speed",
             "--format=csv,noheader,nounits",
@@ -421,10 +428,14 @@ fn collect_nvidia_gpu_runtime(provider: &dyn CommandProvider) -> Option<(Vec<Gpu
         }
     }
 
-    let proc_output = provider.run("nvidia-smi", &[
-            "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
-            "--format=csv,noheader,nounits",
-        ])
+    let proc_output = provider
+        .run(
+            "nvidia-smi",
+            &[
+                "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+            ],
+        )
         .ok();
     let mut processes = Vec::new();
     if let Some(output) = proc_output
@@ -550,7 +561,8 @@ fn collect_logged_in_users(provider: &dyn CommandProvider) -> Vec<String> {
     if !output.success {
         return Vec::new();
     }
-    output.stdout
+    output
+        .stdout
         .lines()
         .take(6)
         .map(|line| line.trim().to_string())
@@ -567,7 +579,8 @@ fn collect_login_history(provider: &dyn CommandProvider) -> Vec<String> {
     if !output.success {
         return Vec::new();
     }
-    output.stdout
+    output
+        .stdout
         .lines()
         .filter(|line| !line.trim().is_empty() && !line.contains("wtmp begins"))
         .take(6)
@@ -582,7 +595,8 @@ fn collect_ssh_sessions(provider: &dyn CommandProvider) -> Vec<String> {
         && output.success
     {
         rows.extend(
-            output.stdout
+            output
+                .stdout
                 .lines()
                 .filter(|line| line.contains("ESTAB") && line.contains(":22"))
                 .take(6)
@@ -596,7 +610,8 @@ fn collect_ssh_sessions(provider: &dyn CommandProvider) -> Vec<String> {
         && output.success
     {
         rows.extend(
-            output.stdout
+            output
+                .stdout
                 .lines()
                 .filter(|line| line.contains("pts/") && line.contains('('))
                 .take(6)
@@ -610,11 +625,13 @@ fn collect_ssh_sessions(provider: &dyn CommandProvider) -> Vec<String> {
 fn collect_failed_logins(provider: &dyn CommandProvider) -> Vec<String> {
     let mut rows = Vec::new();
     if command_exists(provider, "journalctl")
-        && let Ok(output) = provider.run("journalctl", &["-n", "250", "--no-pager", "--output=short"])
+        && let Ok(output) =
+            provider.run("journalctl", &["-n", "250", "--no-pager", "--output=short"])
         && output.success
     {
         rows.extend(
-            output.stdout
+            output
+                .stdout
                 .lines()
                 .filter(|line| {
                     let lower = line.to_ascii_lowercase();
@@ -659,7 +676,8 @@ fn collect_firewall_status(provider: &dyn CommandProvider) -> Vec<String> {
         && let Ok(output) = provider.run("ufw", &["status"])
         && output.success
     {
-        return output.stdout
+        return output
+            .stdout
             .lines()
             .take(4)
             .map(|line| line.trim().to_string())
@@ -670,15 +688,13 @@ fn collect_firewall_status(provider: &dyn CommandProvider) -> Vec<String> {
         && let Ok(state) = provider.run("firewall-cmd", &["--state"])
         && state.success
     {
-        let mut rows = vec![format!(
-            "firewalld: {}",
-            state.stdout.trim()
-        )];
+        let mut rows = vec![format!("firewalld: {}", state.stdout.trim())];
         if let Ok(zones) = provider.run("firewall-cmd", &["--get-active-zones"])
             && zones.success
         {
             rows.extend(
-                zones.stdout
+                zones
+                    .stdout
                     .lines()
                     .take(3)
                     .map(|line| line.trim().to_string()),
@@ -691,7 +707,8 @@ fn collect_firewall_status(provider: &dyn CommandProvider) -> Vec<String> {
         && let Ok(output) = provider.run("iptables", &["-L", "INPUT", "-n"])
         && output.success
     {
-        return output.stdout
+        return output
+            .stdout
             .lines()
             .take(4)
             .map(|line| line.trim().to_string())
@@ -712,15 +729,11 @@ fn collect_security_modules(provider: &dyn CommandProvider) -> Vec<String> {
         };
         Some(format!("SELinux: {mode}"))
     } else if command_exists(provider, "getenforce") {
-        provider.run("getenforce", &[])
+        provider
+            .run("getenforce", &[])
             .ok()
             .filter(|output| output.success)
-            .map(|output| {
-                format!(
-                    "SELinux: {}",
-                    output.stdout.trim()
-                )
-            })
+            .map(|output| format!("SELinux: {}", output.stdout.trim()))
     } else {
         None
     };
@@ -738,11 +751,13 @@ fn collect_security_modules(provider: &dyn CommandProvider) -> Vec<String> {
             "AppArmor: disabled".into()
         }
     } else if command_exists(provider, "aa-status") {
-        provider.run("aa-status", &[])
+        provider
+            .run("aa-status", &[])
             .ok()
             .filter(|output| output.success)
             .and_then(|output| {
-                output.stdout
+                output
+                    .stdout
                     .lines()
                     .find(|line| line.contains("profiles are loaded"))
                     .map(|line| format!("AppArmor: {}", line.trim()))
@@ -757,7 +772,9 @@ fn collect_security_modules(provider: &dyn CommandProvider) -> Vec<String> {
 }
 
 fn command_exists(provider: &dyn CommandProvider, binary: &str) -> bool {
-    provider.run("which", &[binary]).is_ok_and(|output| output.success)
+    provider
+        .run("which", &[binary])
+        .is_ok_and(|output| output.success)
 }
 
 fn read_memory_pressure() -> Option<MemoryPressureInfo> {
@@ -896,16 +913,20 @@ fn collect_rocm_gpu_runtime(provider: &dyn CommandProvider) -> Option<Vec<GpuRun
 /// }
 /// ```
 fn collect_rocm_json(provider: &dyn CommandProvider) -> Option<Vec<GpuRuntimeDevice>> {
-    let output = provider.run("rocm-smi", &[
-            "--showproductname",
-            "--showuse",
-            "--showtemp",
-            "--showmeminfo",
-            "vram",
-            "--showpower",
-            "--showfan",
-            "--json",
-        ])
+    let output = provider
+        .run(
+            "rocm-smi",
+            &[
+                "--showproductname",
+                "--showuse",
+                "--showtemp",
+                "--showmeminfo",
+                "vram",
+                "--showpower",
+                "--showfan",
+                "--json",
+            ],
+        )
         .ok()?;
     if !output.success {
         return None;
@@ -1044,13 +1065,17 @@ fn find_matching_brace(text: &str) -> Option<usize> {
 /// ```
 fn collect_rocm_plain_text(provider: &dyn CommandProvider) -> Option<Vec<GpuRuntimeDevice>> {
     // Use the concise output (always available, no flags needed in old versions)
-    let output = provider.run("rocm-smi", &[
-            "--showproductname",
-            "--showuse",
-            "--showtemp",
-            "--showpower",
-            "--showfan",
-        ])
+    let output = provider
+        .run(
+            "rocm-smi",
+            &[
+                "--showproductname",
+                "--showuse",
+                "--showtemp",
+                "--showpower",
+                "--showfan",
+            ],
+        )
         .ok()?;
     if !output.success {
         return None;
@@ -1128,7 +1153,10 @@ fn collect_rocm_plain_text(provider: &dyn CommandProvider) -> Option<Vec<GpuRunt
 /// GPU  Temp   AvgPwr  SCLK  MCLK  Fan   Perf  PwrCap  VRAM%  GPU%
 /// 0    67.0c  210W    ...   ...   55%   auto  300W    16%    42%
 /// ```
-fn collect_rocm_concise(_provider: &dyn CommandProvider, text: &str) -> Option<Vec<GpuRuntimeDevice>> {
+fn collect_rocm_concise(
+    _provider: &dyn CommandProvider,
+    text: &str,
+) -> Option<Vec<GpuRuntimeDevice>> {
     let mut header_line: Option<Vec<&str>> = None;
     let mut devices = Vec::new();
 

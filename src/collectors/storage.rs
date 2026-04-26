@@ -294,4 +294,3 @@ fn command_exists(provider: &dyn CommandProvider, binary: &str) -> bool {
         .run("which", &[binary])
         .is_ok_and(|output| output.success)
 }
-

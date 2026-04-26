@@ -124,9 +124,13 @@ pub fn ensure_linux_systemd() -> Result<()> {
 
 /// Run a systemctl command and return stdout as a string.
 pub fn run_systemctl(provider: &dyn CommandProvider, args: &[&str]) -> Result<String> {
-    let output = provider
-        .run("systemctl", args)
-        .map_err(|e| anyhow!("failed to invoke systemctl with args: {}: {}", args.join(" "), e))?;
+    let output = provider.run("systemctl", args).map_err(|e| {
+        anyhow!(
+            "failed to invoke systemctl with args: {}: {}",
+            args.join(" "),
+            e
+        )
+    })?;
 
     if output.success {
         Ok(output.stdout.trim().to_string())
@@ -166,11 +170,7 @@ pub fn collect_service_logs(
         .map_err(|e| anyhow!("failed to invoke journalctl for service {service}: {e}"))?;
 
     if output.success {
-        Ok(output
-            .stdout
-            .lines()
-            .map(|line| line.to_string())
-            .collect())
+        Ok(output.stdout.lines().map(|line| line.to_string()).collect())
     } else {
         let stderr = output.stderr.trim().to_string();
         Err(anyhow!(
@@ -291,4 +291,3 @@ fn count_services_by_state(provider: &dyn CommandProvider, state: &str) -> Resul
     )?;
     Ok(count_nonempty_lines(&output))
 }
-

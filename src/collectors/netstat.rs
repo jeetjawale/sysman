@@ -130,7 +130,9 @@ pub fn collect_process_bandwidth(
 }
 
 /// Collect interface → IP address mappings via `ip addr show`.
-pub fn collect_interface_addresses(provider: &dyn CommandProvider) -> BTreeMap<String, Vec<String>> {
+pub fn collect_interface_addresses(
+    provider: &dyn CommandProvider,
+) -> BTreeMap<String, Vec<String>> {
     if !cfg!(target_os = "linux") {
         return BTreeMap::new();
     }
@@ -237,7 +239,10 @@ fn parse_connection_line(line: &str) -> Option<ConnectionRow> {
     })
 }
 
-pub fn kill_connection(provider: &dyn CommandProvider, conn: &ConnectionRow) -> Result<String, String> {
+pub fn kill_connection(
+    provider: &dyn CommandProvider,
+    conn: &ConnectionRow,
+) -> Result<String, String> {
     if !cfg!(target_os = "linux") {
         return Err("connection actions are currently supported on Linux hosts only".into());
     }

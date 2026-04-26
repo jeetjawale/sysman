@@ -8,10 +8,10 @@ pub mod storage;
 pub mod systemd;
 
 // Re-export core types
-pub use provider::{CommandOutput, CommandProvider, RealProvider};
 pub use host::{CpuRuntimeInfo, GpuRuntimeInfo, HardwareInfo, MemoryRuntimeInfo};
 pub use netstat::{ConnectionRow, ProcessNetRow};
 pub use procs::ProcessRow;
+pub use provider::{CommandProvider, RealProvider};
 pub use storage::{DiskIoCounters, DiskIoRow, DiskRow, SmartHealthRow};
 pub use systemd::{ServiceFailureDetails, ServiceRow, ServiceStateCounts, ServiceSummary};
 
@@ -105,7 +105,6 @@ pub fn collect_snapshot(
         containers: containers::collect_containers(provider),
     })
 }
-
 
 // ---------------------------------------------------------------------------
 // Shared utilities

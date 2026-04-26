@@ -1,5 +1,5 @@
-use crate::cli::ProcessSort;
 use super::CommandProvider;
+use crate::cli::ProcessSort;
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::fs;
