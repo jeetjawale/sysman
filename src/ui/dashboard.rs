@@ -4,7 +4,7 @@ use crate::theme::Theme;
 use crate::ui::widgets;
 use ratatui::{
     prelude::*,
-    widgets::{Axis, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Axis, Chart, Dataset, GraphType, Paragraph, Wrap},
 };
 use std::collections::HashMap;
 
@@ -277,7 +277,9 @@ fn overview(
         ]));
     }
 
-    Paragraph::new(lines).block(widgets::block(&app.theme, "Overview"))
+    Paragraph::new(lines)
+        .block(widgets::block(&app.theme, "Overview"))
+        .wrap(Wrap { trim: true })
 }
 
 fn top_offenders(app: &App, snapshot: &Snapshot, theme: &Theme) -> Paragraph<'static> {
