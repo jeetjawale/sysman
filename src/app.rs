@@ -406,9 +406,8 @@ impl App {
     pub(crate) fn refresh(&mut self) {
         let elapsed = self.last_refresh.elapsed().as_secs_f64().max(1.0);
         let filter = collectors::CollectionFilter {
-            fast_lane: true,
-            medium_lane: true,
-            slow_lane: true,
+            medium_lane: self.refresh_count.is_multiple_of(5),
+            slow_lane: self.refresh_count.is_multiple_of(30),
             active_tab: self.active_tab,
         };
 
@@ -418,6 +417,7 @@ impl App {
             self.service_state_filter,
             200,
             filter,
+            self.snapshot.as_ref(),
         ) {
             Ok(mut snapshot) => {
                 self.refresh_count += 1;

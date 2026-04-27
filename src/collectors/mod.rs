@@ -21,7 +21,6 @@ use sysinfo::{ProcessesToUpdate, System};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CollectionFilter {
-    pub fast_lane: bool,
     pub medium_lane: bool,
     pub slow_lane: bool,
     pub active_tab: crate::app::Tab,
@@ -93,7 +92,7 @@ pub fn collect_snapshot(
             .ok()
             .map(|(running, failed)| ServiceSummary { running, failed })
     } else if cfg!(target_os = "linux") {
-        previous.and_then(|p| p.service_summary.clone())
+        previous.and_then(|p| p.service_summary)
     } else {
         None
     };
@@ -101,7 +100,7 @@ pub fn collect_snapshot(
     let service_state_counts = if should_collect_services && cfg!(target_os = "linux") {
         systemd::count_service_states(provider).ok()
     } else if cfg!(target_os = "linux") {
-        previous.and_then(|p| p.service_state_counts.clone())
+        previous.and_then(|p| p.service_state_counts)
     } else {
         None
     };

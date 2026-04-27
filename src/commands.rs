@@ -21,12 +21,18 @@ fn print_summary() -> Result<()> {
     sys.refresh_all();
     let provider = RealProvider;
     let filter = collectors::CollectionFilter {
-        fast_lane: true,
         medium_lane: true,
         slow_lane: true,
         ..Default::default()
     };
-    let snapshot = collectors::collect_snapshot(&mut sys, &provider, ServiceState::Running, 10, filter)?;
+    let snapshot = collectors::collect_snapshot(
+        &mut sys,
+        &provider,
+        ServiceState::Running,
+        10,
+        filter,
+        None,
+    )?;
 
     println!("System Summary");
     println!("==============");
