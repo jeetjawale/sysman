@@ -80,7 +80,8 @@ pub fn collect_snapshot(
 
     let processes = procs::collect_processes(sys, process_limit, ProcessSort::Cpu);
 
-    let should_collect_services = filter.medium_lane || filter.active_tab == crate::app::Tab::Services;
+    let should_collect_services =
+        filter.medium_lane || filter.active_tab == crate::app::Tab::Services;
     let services = if should_collect_services {
         systemd::collect_services(provider, service_state, 50).unwrap_or_default()
     } else {
@@ -105,7 +106,8 @@ pub fn collect_snapshot(
         None
     };
 
-    let should_collect_hardware = filter.slow_lane || filter.active_tab == crate::app::Tab::Hardware;
+    let should_collect_hardware =
+        filter.slow_lane || filter.active_tab == crate::app::Tab::Hardware;
     let hardware = if should_collect_hardware {
         host::collect_hardware_info(provider)
     } else {

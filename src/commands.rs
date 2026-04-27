@@ -25,14 +25,8 @@ fn print_summary() -> Result<()> {
         slow_lane: true,
         ..Default::default()
     };
-    let snapshot = collectors::collect_snapshot(
-        &mut sys,
-        &provider,
-        ServiceState::Running,
-        10,
-        filter,
-        None,
-    )?;
+    let snapshot =
+        collectors::collect_snapshot(&mut sys, &provider, ServiceState::Running, 10, filter, None)?;
 
     println!("System Summary");
     println!("==============");
