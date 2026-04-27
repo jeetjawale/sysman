@@ -64,26 +64,70 @@ pub fn collect_snapshot(
     service_state: ServiceState,
     process_limit: usize,
     filter: CollectionFilter,
+    previous: Option<&Snapshot>,
 ) -> Result<Snapshot> {
     sys.refresh_all();
     sys.refresh_processes(ProcessesToUpdate::All, true);
     sys.refresh_cpu_usage();
 
-    let disks = storage::collect_disks(provider);
+    let should_collect_disks = filter.slow_lane
+        || filter.active_tab == crate::app::Tab::Disk
+        || filter.active_tab == crate::app::Tab::Overview;
+    let disks = if should_collect_disks {
+        storage::collect_disks(provider)
+    } else {
+        previous.map(|p| p.disks.clone()).unwrap_or_default()
+    };
+
     let processes = procs::collect_processes(sys, process_limit, ProcessSort::Cpu);
-    let services = systemd::collect_services(provider, service_state, 50).unwrap_or_default();
-    let service_summary = if cfg!(target_os = "linux") {
+
+    let should_collect_services = filter.medium_lane || filter.active_tab == crate::app::Tab::Services;
+    let services = if should_collect_services {
+        systemd::collect_services(provider, service_state, 50).unwrap_or_default()
+    } else {
+        previous.map(|p| p.services.clone()).unwrap_or_default()
+    };
+
+    let service_summary = if should_collect_services && cfg!(target_os = "linux") {
         systemd::count_systemd_services(provider)
             .ok()
             .map(|(running, failed)| ServiceSummary { running, failed })
+    } else if cfg!(target_os = "linux") {
+        previous.and_then(|p| p.service_summary.clone())
     } else {
         None
     };
-    let service_state_counts = if cfg!(target_os = "linux") {
+
+    let service_state_counts = if should_collect_services && cfg!(target_os = "linux") {
         systemd::count_service_states(provider).ok()
+    } else if cfg!(target_os = "linux") {
+        previous.and_then(|p| p.service_state_counts.clone())
     } else {
         None
     };
+
+    let should_collect_hardware = filter.slow_lane || filter.active_tab == crate::app::Tab::Hardware;
+    let hardware = if should_collect_hardware {
+        host::collect_hardware_info(provider)
+    } else {
+        previous.map(|p| p.hardware.clone()).unwrap_or_default()
+    };
+
+    let should_collect_gpu = filter.medium_lane || filter.active_tab == crate::app::Tab::Gpu;
+    let gpu_runtime = if should_collect_gpu {
+        host::collect_gpu_runtime_info(provider)
+    } else {
+        previous.map(|p| p.gpu_runtime.clone()).unwrap_or_default()
+    };
+
+    let should_collect_containers =
+        filter.slow_lane || filter.active_tab == crate::app::Tab::Containers;
+    let containers = if should_collect_containers {
+        containers::collect_containers(provider)
+    } else {
+        previous.map(|p| p.containers.clone()).unwrap_or_default()
+    };
+
     let load = System::load_average();
 
     Ok(Snapshot {
@@ -103,15 +147,15 @@ pub fn collect_snapshot(
         load_average: format!("{:.2} / {:.2} / {:.2}", load.one, load.five, load.fifteen),
         cpu_per_core: sys.cpus().iter().map(|cpu| cpu.cpu_usage()).collect(),
         cpu_runtime: host::collect_cpu_runtime_info(),
-        gpu_runtime: host::collect_gpu_runtime_info(provider),
+        gpu_runtime,
         memory_runtime: host::collect_memory_runtime_info(),
-        hardware: host::collect_hardware_info(provider),
+        hardware,
         disks,
         processes,
         services,
         service_summary,
         service_state_counts,
-        containers: containers::collect_containers(provider),
+        containers,
     })
 }
 
