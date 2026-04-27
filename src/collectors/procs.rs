@@ -185,26 +185,39 @@ fn linux_process_groups(pid: u32) -> (String, String) {
                 service = Some((*token).to_string());
             }
 
-            if container.is_none() && (token.starts_with("docker-") || token.starts_with("crio-")) {
-                let trimmed = token
-                    .trim_start_matches("docker-")
-                    .trim_start_matches("crio-")
-                    .trim_end_matches(".scope");
-                container = Some(short_container_id(trimmed));
+            if container.is_none() {
+                // 1. Check for standard container engine prefixes in systemd scopes
+                for prefix in &[
+                    "docker-",
+                    "crio-",
+                    "libpod-",
+                    "cri-containerd-",
+                    "machine.slice-",
+                ] {
+                    if token.starts_with(prefix) {
+                        let trimmed = token
+                            .trim_start_matches(prefix)
+                            .trim_end_matches(".scope")
+                            .trim_end_matches(".service");
+                        container = Some(short_container_id(trimmed));
+                        break;
+                    }
+                }
             }
 
-            if container.is_none()
-                && (token.contains("kubepods")
-                    || token.contains("docker")
-                    || token.contains("podman"))
-            {
-                // Look for a 64-char hex string in the token
-                if let Some(pos) = token.find(|c: char| c.is_ascii_hexdigit()) {
-                    let potential_id = &token[pos..];
-                    if potential_id.len() >= 12
-                        && potential_id.chars().take(12).all(|c| c.is_ascii_hexdigit())
-                    {
-                        container = Some(short_container_id(&potential_id[..12]));
+            if container.is_none() {
+                // 2. Look for exactly 64 hex chars (standard container ID)
+                if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+                    container = Some(short_container_id(token));
+                } else if token.len() > 64 {
+                    // 3. Fallback: Try to find a contiguous 64-char hex string inside the token
+                    //    (Handles deeply nested or prefixed cgroup paths like kubepods-...)
+                    for i in 0..=token.len().saturating_sub(64) {
+                        let slice = &token[i..i + 64];
+                        if slice.chars().all(|c| c.is_ascii_hexdigit()) {
+                            container = Some(short_container_id(slice));
+                            break;
+                        }
                     }
                 }
             }

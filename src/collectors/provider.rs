@@ -18,12 +18,40 @@ pub struct RealProvider;
 
 impl CommandProvider for RealProvider {
     fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput> {
-        let output = ProcessCommand::new(command).args(args).output()?;
+        let mut out = ProcessCommand::new(command).args(args).output()?;
+
+        // If the command failed with a permission-like error, try with sudo non-interactive.
+        // List of common tools that often require root for full functionality.
+        let priv_commands = [
+            "smartctl",
+            "journalctl",
+            "ss",
+            "docker",
+            "podman",
+            "dmesg",
+            "getenforce",
+            "aa-status",
+            "ufw",
+            "iptables",
+            "firewall-cmd",
+        ];
+
+        if !out.status.success() && priv_commands.contains(&command) {
+            // Attempt with sudo -n (non-interactive).
+            // This only succeeds if the user has passwordless sudo for this command.
+            let mut sudo_args = vec!["-n", command];
+            sudo_args.extend_from_slice(args);
+            if let Ok(sudo_out) = ProcessCommand::new("sudo").args(&sudo_args).output()
+                && sudo_out.status.success()
+            {
+                out = sudo_out;
+            }
+        }
 
         Ok(CommandOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+            success: out.status.success(),
         })
     }
 }
