@@ -20,7 +20,13 @@ fn print_summary() -> Result<()> {
     let mut sys = System::new_all();
     sys.refresh_all();
     let provider = RealProvider;
-    let snapshot = collectors::collect_snapshot(&mut sys, &provider, ServiceState::Running, 10)?;
+    let filter = collectors::CollectionFilter {
+        fast_lane: true,
+        medium_lane: true,
+        slow_lane: true,
+        ..Default::default()
+    };
+    let snapshot = collectors::collect_snapshot(&mut sys, &provider, ServiceState::Running, 10, filter)?;
 
     println!("System Summary");
     println!("==============");

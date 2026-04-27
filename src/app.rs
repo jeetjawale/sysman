@@ -405,14 +405,22 @@ impl App {
 
     pub(crate) fn refresh(&mut self) {
         let elapsed = self.last_refresh.elapsed().as_secs_f64().max(1.0);
+        let filter = collectors::CollectionFilter {
+            fast_lane: true,
+            medium_lane: true,
+            slow_lane: true,
+            active_tab: self.active_tab,
+        };
 
         match collectors::collect_snapshot(
             &mut self.sys,
             self.provider.as_ref(),
             self.service_state_filter,
             200,
+            filter,
         ) {
             Ok(mut snapshot) => {
+                self.refresh_count += 1;
                 snapshot.processes =
                     collectors::procs::collect_processes(&self.sys, 200, self.process_sort);
                 self.service_error =
