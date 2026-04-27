@@ -19,6 +19,14 @@ use crate::cli::{ProcessSort, ServiceState};
 use anyhow::Result;
 use sysinfo::{ProcessesToUpdate, System};
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CollectionFilter {
+    pub fast_lane: bool,
+    pub medium_lane: bool,
+    pub slow_lane: bool,
+    pub active_tab: crate::app::Tab,
+}
+
 /// Complete system snapshot for TUI display.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -55,6 +63,7 @@ pub fn collect_snapshot(
     provider: &dyn CommandProvider,
     service_state: ServiceState,
     process_limit: usize,
+    filter: CollectionFilter,
 ) -> Result<Snapshot> {
     sys.refresh_all();
     sys.refresh_processes(ProcessesToUpdate::All, true);

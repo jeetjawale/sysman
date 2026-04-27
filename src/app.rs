@@ -81,8 +81,9 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
 // Core types
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum Tab {
+    #[default]
     Overview,
     Cpu,
     Memory,
@@ -195,6 +196,7 @@ enum DiskScanEvent {
 pub(crate) struct App {
     pub active_tab: Tab,
     pub snapshot: Option<Snapshot>,
+    pub refresh_count: u64,
     pub service_error: Option<String>,
     pub service_logs: Vec<String>,
     pub service_logs_error: Option<String>,
@@ -307,6 +309,7 @@ impl App {
         Self {
             active_tab: Tab::Overview,
             snapshot: None,
+            refresh_count: 0,
             service_error: None,
             service_logs: Vec::new(),
             service_logs_error: None,
