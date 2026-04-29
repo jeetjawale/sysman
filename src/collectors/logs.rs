@@ -66,11 +66,11 @@ mod tests {
         let mut responses = HashMap::new();
         responses.insert(
             "journalctl -n 10 --no-pager --output=short".to_string(),
-            CommandOutput {
+            crate::collectors::provider::MockBehavior::Success(CommandOutput {
                 stdout: "line 1\nline 2\nline 3".to_string(),
                 stderr: "".to_string(),
                 success: true,
-            },
+            }),
         );
 
         let mock_provider = MockProvider { responses };

@@ -57,20 +57,40 @@ impl CommandProvider for RealProvider {
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone)]
+pub enum MockBehavior {
+    Success(CommandOutput),
+    MissingBinary,
+    ExitFailure { exit_code: i32, stderr: String },
+    Timeout,
+}
+
+#[cfg(test)]
 pub struct MockProvider {
-    pub responses: std::collections::HashMap<String, CommandOutput>,
+    pub responses: std::collections::HashMap<String, MockBehavior>,
 }
 
 #[cfg(test)]
 impl CommandProvider for MockProvider {
     fn run(&self, command: &str, args: &[&str]) -> Result<CommandOutput> {
         let key = format!("{} {}", command, args.join(" "));
-        self.responses.get(&key).cloned().ok_or_else(|| {
+        let behavior = self.responses.get(&key).cloned().ok_or_else(|| {
             anyhow!(
                 "Mock response not found for: {} {}",
                 command,
                 args.join(" ")
             )
-        })
+        })?;
+
+        match behavior {
+            MockBehavior::Success(output) => Ok(output),
+            MockBehavior::MissingBinary => Err(anyhow!("Binary missing: {}", command)),
+            MockBehavior::ExitFailure { exit_code: _, stderr } => Ok(CommandOutput {
+                stdout: "".to_string(),
+                stderr,
+                success: false,
+            }),
+            MockBehavior::Timeout => Err(anyhow!("Command timed out: {}", command)),
+        }
     }
 }

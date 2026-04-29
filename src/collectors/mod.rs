@@ -5,6 +5,7 @@ pub mod netstat;
 pub mod plugin;
 pub mod procs;
 pub mod provider;
+pub mod scheduler;
 pub mod storage;
 pub mod systemd;
 

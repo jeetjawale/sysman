@@ -2,8 +2,8 @@ use crate::animation::AnimationManager;
 use crate::cli::{ProcessSort, ServiceState};
 use crate::collectors::{
     self, ConnectionRow, DiskIoCounters, DiskIoRow, ProcessNetRow, ProcessRow,
-    ServiceFailureDetails, SmartHealthRow, Snapshot,
-    provider::{CommandProvider, RealProvider},
+    ServiceFailureDetails, SmartHealthRow, Snapshot, provider::{CommandProvider, RealProvider},
+    scheduler,
 };
 use crate::theme::{Theme, default_theme, parse_color};
 use crate::ui;
@@ -287,6 +287,7 @@ pub(crate) struct App {
     disk_scan_receiver: Option<Receiver<DiskScanEvent>>,
     pub(crate) config: crate::config::Config,
     pub(crate) refresh_interval: Duration,
+    pub scheduler: scheduler::Scheduler,
     pub provider: Arc<dyn CommandProvider>,
 }
 
@@ -305,6 +306,9 @@ impl App {
             theme.border_active = color;
             theme.active_tab = color;
         }
+
+        let provider: Arc<dyn CommandProvider> = Arc::new(RealProvider);
+        let scheduler = scheduler::Scheduler::new(provider.clone());
 
         Self {
             active_tab: Tab::Overview,
@@ -397,7 +401,8 @@ impl App {
             config,
             refresh_interval,
             theme,
-            provider: Arc::new(RealProvider),
+            scheduler,
+            provider,
         }
     }
 
