@@ -20,6 +20,8 @@ sysinfo = "0.33"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 tokio = { version = "1.42", features = ["full"] }
+thiserror = "2.0"
+async-trait = "0.1"
 
 [profile.release]
 lto = true

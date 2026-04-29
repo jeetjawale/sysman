@@ -2,6 +2,7 @@ pub mod containers;
 pub mod host;
 pub mod logs;
 pub mod netstat;
+pub mod plugin;
 pub mod procs;
 pub mod provider;
 pub mod storage;
@@ -10,6 +11,9 @@ pub mod systemd;
 // Re-export core types
 pub use host::{CpuRuntimeInfo, GpuRuntimeInfo, HardwareInfo, MemoryRuntimeInfo};
 pub use netstat::{ConnectionRow, ProcessNetRow};
+pub use plugin::{
+    Collector, CollectorError, CollectorMeta, CollectorOutput, RefreshStrategy, ViewHint,
+};
 pub use procs::ProcessRow;
 pub use provider::{CommandProvider, RealProvider};
 pub use storage::{DiskIoCounters, DiskIoRow, DiskRow, SmartHealthRow};
